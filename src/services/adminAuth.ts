@@ -72,8 +72,17 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
     } catch {
       /* ignore */
     }
-    if (!profileError && role === 'student') {
-      return { ok: false, error: 'Students cannot access the Admin Portal.' };
+    if (role === 'student') {
+      return {
+        ok: false,
+        error: `Account ${data.user.email} has the 'student' role. To grant access, update its role to 'admin' in the Supabase 'profiles' table.`,
+      };
+    }
+    if (!profile) {
+      return {
+        ok: false,
+        error: `No profile record found in Supabase for ${data.user.email}. Ensure a row exists in 'profiles' with an administrative role (admin, faculty, staff).`,
+      };
     }
     return { ok: false, error: 'No administrative role found for this account.' };
   }
