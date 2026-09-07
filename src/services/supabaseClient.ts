@@ -1,10 +1,15 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const DEFAULT_SUPABASE_URL = 'https://ljmojknssgiqlpyjrmnl.supabase.co';
+const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_UQYNX3COyvtE5Wj9jHs6wA_zpz4wEbA';
+
+const supabaseUrl =
+  (import.meta.env.VITE_SUPABASE_URL as string | undefined) || DEFAULT_SUPABASE_URL;
 // Accept either the legacy anon JWT or the modern publishable key.
 const supabaseAnonKey =
   (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ||
-  (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined);
+  (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined) ||
+  DEFAULT_SUPABASE_ANON_KEY;
 
 export const isSupabaseConfigured: boolean = Boolean(supabaseUrl && supabaseAnonKey);
 
