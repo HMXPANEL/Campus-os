@@ -73,16 +73,16 @@ export const PortalSelect: React.FC<PortalSelectProps> = ({ onSelectStudent, onS
                   Student
                 </h3>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
-                  Active
+                  Instant Access
                 </span>
               </div>
               <p className="mt-1.5 text-xs text-campus-textMuted leading-relaxed">
-                Track attendance, classes, academic records, and campus services.
+                Track attendance, classes, academic records, and campus services without entering a password.
               </p>
             </div>
 
             <div className="mt-5 flex items-center gap-1.5 text-xs font-semibold text-blue-400 group-hover:translate-x-1 transition-transform">
-              <span>Enter Portal</span>
+              <span>Enter Portal (1-Click)</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </div>
           </button>

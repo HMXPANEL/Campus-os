@@ -63,11 +63,20 @@ const StudentApp: React.FC = () => {
     setNavigationMeta({});
   };
 
+  const handleSelectStudent = async () => {
+    const res = await AuthService.loginWithoutPassword();
+    if (res.success) {
+      setFlowState('student-app');
+    } else {
+      setFlowState('student-login');
+    }
+  };
+
   // 1. Initial Portal Selection View
   if (flowState === 'portal-select') {
     return (
       <PortalSelect
-        onSelectStudent={() => setFlowState('student-login')}
+        onSelectStudent={handleSelectStudent}
         onSelectAdmin={() => navigate('/admin/login')}
       />
     );

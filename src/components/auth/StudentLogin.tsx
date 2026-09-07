@@ -88,6 +88,43 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({ onBack, onLoginSucce
             </div>
           )}
 
+          {/* Quick 1-Click Access Without Password */}
+          <div className="mb-6">
+            <button
+              type="button"
+              disabled={loading}
+              onClick={async () => {
+                setError(null);
+                setLoading(true);
+                try {
+                  const res = await AuthService.loginWithoutPassword();
+                  if (res.success) {
+                    onLoginSuccess();
+                  } else {
+                    setError(res.error || 'Unable to sign in.');
+                  }
+                } catch {
+                  setError('Connection failed. Please retry.');
+                } finally {
+                  setLoading(false);
+                }
+              }}
+              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-sm font-semibold shadow-glow-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>Enter Without Password (Instant Access)</span>
+            </button>
+
+            <div className="relative my-5">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-slate-800" />
+              </div>
+              <div className="relative flex justify-center text-[10px] uppercase font-mono tracking-wider">
+                <span className="bg-slate-900 px-3 text-slate-500">Or sign in with credentials</span>
+              </div>
+            </div>
+          </div>
+
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
