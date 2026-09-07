@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
-import { 
-  Lock, 
-  Mail, 
-  ArrowLeft, 
-  Sparkles, 
-  ShieldAlert, 
-  KeyRound, 
+import {
+  Lock,
+  Mail,
+  ArrowLeft,
+  Sparkles,
+  ShieldAlert,
   HelpCircle,
   Eye,
   EyeOff
@@ -25,30 +24,23 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({ onBack, onLoginSucce
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
-
-    setTimeout(() => {
-      const result = AuthService.login(identifier, password);
-      setLoading(false);
+    try {
+      // Real Supabase authentication — verified server-side. No demo bypass.
+      const result = await AuthService.login(identifier, password);
       if (result.success) {
-        // Best-effort upgrade to a Supabase Auth session (offline-safe).
-        AuthService.linkSupabaseSession(identifier, password);
         onLoginSuccess();
       } else {
         setError(result.error || 'Authentication failed. Please check credentials.');
       }
-    }, 400);
-  };
-
-  const handleFillDemo = () => {
-    const demoEmail = import.meta.env.VITE_DEMO_STUDENT_EMAIL || 'aditya.sharma@campus.edu';
-    const demoPassword = import.meta.env.VITE_DEMO_STUDENT_PASSWORD || 'CampusOS@2026';
-    setIdentifier(demoEmail);
-    setPassword(demoPassword);
-    setError(null);
+    } catch {
+      setError('Unable to connect to campus services. Check your connection and try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -77,7 +69,7 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({ onBack, onLoginSucce
       {/* Login Card Form */}
       <main className="relative z-10 max-w-md mx-auto w-full my-auto py-8">
         <div className="glass-panel rounded-2xl p-7 sm:p-8 shadow-2xl border border-slate-800/90 relative">
-          
+
           {/* Header */}
           <div className="text-center mb-6">
             <h2 className="text-2xl font-bold tracking-tight text-white">
@@ -86,21 +78,6 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({ onBack, onLoginSucce
             <p className="text-xs text-campus-textMuted mt-1">
               Welcome back! Continue your academic journey.
             </p>
-          </div>
-
-          {/* Demo helper pill */}
-          <div className="mb-6 p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-xs text-blue-300">
-              <KeyRound className="w-4 h-4 text-blue-400 shrink-0" />
-              <span>Demo Account Available</span>
-            </div>
-            <button
-              type="button"
-              onClick={handleFillDemo}
-              className="text-xs bg-blue-600 hover:bg-blue-500 text-white font-medium px-2.5 py-1 rounded-lg transition-colors shadow-sm"
-            >
-              Fill Credentials
-            </button>
           </div>
 
           {/* Error Message */}
@@ -126,7 +103,7 @@ export const StudentLogin: React.FC<StudentLoginProps> = ({ onBack, onLoginSucce
                   required
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
-                  placeholder="e.g. aditya.sharma@campus.edu or CS23045"
+                  placeholder="e.g. firstname.lastname@campus.edu or your college ID"
                   className="w-full pl-10 pr-3.5 py-2.5 bg-slate-950/70 border border-slate-800 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
                 />
               </div>

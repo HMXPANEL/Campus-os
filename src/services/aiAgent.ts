@@ -96,20 +96,29 @@ export class CampusAIAgent {
 
     // 2. CONTEXTUAL PROXIMITY RESOLUTION: "Something closer to my next class"
     if (isFollowupAboutProximity) {
-      const targetRoom = nextClass?.room || 'Room 204';
-      const targetSubject = nextClass?.subjectName || 'DBMS';
-      const nearbyStudy = facilities.find(f => f.name.includes('CS Block')) || facilities[1];
+      if (!nextClass || facilities.length === 0) {
+        return {
+          id: `ai-msg-${Date.now()}`,
+          sender: 'assistant',
+          text: `I couldn't find an upcoming class or study space in the live campus data right now. Please check your timetable and try again.`,
+          timestamp: 'Just now',
+          dataSources: ['Timetable', 'Facilities · Study Spaces']
+        };
+      }
+      const targetRoom = nextClass.room;
+      const targetSubject = nextClass.subjectName;
+      const nearbyStudy = facilities.slice().sort((a, b) => a.walkTimeFromRoom204Min - b.walkTimeFromRoom204Min)[0];
 
       return {
         id: `ai-msg-${Date.now()}`,
         sender: 'assistant',
-        text: `Your next lecture is **${targetSubject}** in **${targetRoom}** at 10:30 AM.\n\nThe closest quiet study location is the **${nearbyStudy.name}** (${nearbyStudy.location}).\n\n- **Walk time to ${targetRoom}:** Only ${nearbyStudy.walkTimeFromRoom204Min} minute walk.\n- **Current Availability:** ${nearbyStudy.availableSeats} of ${nearbyStudy.capacity} seats free (${100 - nearbyStudy.occupancyPercentage}% available).\n- **Amenities:** Air conditioning, fast Wi-Fi, and laptop docking monitors.`,
+        text: `Your next lecture is **${targetSubject}** in **${targetRoom}** at ${nextClass.startTime}.\n\nThe closest quiet study location is the **${nearbyStudy.name}** (${nearbyStudy.location}).\n\n- **Walk time:** About ${nearbyStudy.walkTimeFromRoom204Min} minute(s).\n- **Current Availability:** ${nearbyStudy.availableSeats} of ${nearbyStudy.capacity} seats free (${100 - nearbyStudy.occupancyPercentage}% available).\n- **Amenities:** ${(nearbyStudy.amenities ?? []).join(', ') || 'See facility details'}.`,
         timestamp: 'Just now',
         dataSources: ['Timetable', 'Facilities · Study Spaces'],
         recommendations: [
           {
             title: nearbyStudy.name,
-            description: `${nearbyStudy.availableSeats} seats open right now (1 min from ${targetRoom}).`,
+            description: `${nearbyStudy.availableSeats} seats open right now (${nearbyStudy.walkTimeFromRoom204Min} min walk).`,
             reason: `Closest available study lounge to your next lecture in ${targetRoom}.`,
             category: 'Study Spot',
             actionText: 'Open Facility Info',
@@ -123,37 +132,56 @@ export class CampusAIAgent {
     if (
       (query.includes('2 hours') || query.includes('free time') || query.includes('decide what to do') || query.includes('between classes') || query.includes('break'))
     ) {
+      // All values below come from the live Supabase-backed store — nothing hardcoded.
+      const libAvail = library.availability.availablePercentage;
+      const nearestFacility = facilities.slice().sort((a, b) => a.walkTimeFromRoom204Min - b.walkTimeFromRoom204Min)[0];
+      const topMeal = canteen.menu.find(m => m.isAvailable);
+      const pendingDeadlines = deadlines.filter(d => d.status === 'Pending');
+      const topDeadline = pendingDeadlines.slice().sort((a, b) => Number(b.priority === 'High') - Number(a.priority === 'High'))[0];
+      const riskSubjects = attendance.filter(a => a.isLow || a.percentage < 75);
+      const nextName = nextClass ? `${nextClass.subjectName} (${nextClass.subjectCode})` : 'your next class';
+      const nextWhen = nextClass ? `${nextClass.startTime} in ${nextClass.room}` : 'as scheduled';
+      const nextFaculty = nextClass?.faculty ?? 'your faculty';
+
       const recs: ActionRecommendation[] = [
         {
-          title: 'Study at Central Library',
-          description: `60% seats available in 2nd floor quiet wing. Approximately 5 min from ${nextClass?.room || 'Room 204'}.`,
-          reason: 'Recommended because you have a 2-hour free window and the library provides a distraction-free environment near your next class.',
+          title: `Study at ${nearestFacility ? nearestFacility.name : 'the Library'}`,
+          description: nearestFacility
+            ? `${nearestFacility.availableSeats} of ${nearestFacility.capacity} seats free, ${nearestFacility.walkTimeFromRoom204Min} min walk. Library overall ${libAvail}% seats available.`
+            : `Library overall ${libAvail}% seats available right now.`,
+          reason: 'Recommended because you have a free window and a quiet space near your next class keeps you on schedule.',
           category: 'Quiet Study',
           actionText: 'View Timetable',
           actionTarget: { view: 'student-data', tab: 'timetable' }
         },
         {
-          title: 'Grab lunch at North Canteen',
-          description: `Today's crowd is Moderate with 10–15 min waiting. Paneer Bowl (₹80) and Deluxe Thali (₹70) are freshly ready.`,
-          reason: 'Recommended to eat before your 10:30 AM DBMS lecture to avoid peak lunch rush at 1:00 PM.',
+          title: `Grab a bite at ${canteen.status.canteenName}`,
+          description: topMeal
+            ? `Crowd is ${canteen.status.crowdLevel} (~${canteen.status.estimatedWaitMinutes} min wait). ${topMeal.name} (₹${topMeal.price}) is available.`
+            : `Crowd is ${canteen.status.crowdLevel} (~${canteen.status.estimatedWaitMinutes} min wait).`,
+          reason: `Recommended to eat before ${nextName} to avoid the peak rush.`,
           category: 'Dining',
           actionText: 'View Canteen Menu',
           actionTarget: { view: 'dashboard' }
         },
-        {
-          title: 'Prepare your DBMS Assignment 3',
-          description: 'Due tomorrow at 11:59 PM (High Priority). You have 2 relational algebra questions left to solve.',
-          reason: 'Recommended because DBMS is your next class and attendance is currently 68% (sub-75% alert). Submitting early strengthens your internal score.',
-          category: 'Academic Deadline',
-          actionText: 'Open Deadlines',
-          actionTarget: { view: 'student-data', tab: 'deadlines' }
-        }
+        ...(topDeadline
+          ? [
+              {
+                title: `Work on: ${topDeadline.title}`,
+                description: `Due ${topDeadline.dueDate} (${topDeadline.priority} Priority).${riskSubjects.length > 0 ? ` You have ${riskSubjects.length} subject(s) below 75% attendance — submitted work protects your internal score.` : ''}`,
+                reason: `Recommended because "${topDeadline.title}" is your most pressing pending item before ${nextName}.`,
+                category: 'Academic Deadline',
+                actionText: 'Open Deadlines',
+                actionTarget: { view: 'student-data', tab: 'deadlines' },
+              } as ActionRecommendation,
+            ]
+          : []),
       ];
 
       return {
         id: `ai-msg-${Date.now()}`,
         sender: 'assistant',
-        text: `You have a **2-hour window** before your next class (**${nextClass?.subjectName || 'DBMS'}** at 10:30 AM in **${nextClass?.room || 'Room 204'}** with ${nextClass?.faculty || 'Prof. Verma'}).\n\nHere are 3 tailored recommendations based on your schedule, pending deadlines, and campus live occupancy:`,
+        text: `You have time before ${nextName} at ${nextWhen} with ${nextFaculty}.\n\nHere are tailored recommendations based on your live schedule, pending deadlines, and campus occupancy:`,
         timestamp: 'Just now',
         dataSources: ['Timetable', 'Facilities', 'Deadlines', 'Canteen'],
         recommendations: recs
@@ -169,30 +197,69 @@ export class CampusAIAgent {
       query.includes('my timetable') ||
       query.includes('schedule today')
     ) {
-      const todaySlots = timetable.filter(t => t.dayOfWeek === 'Monday');
-      const next = nextClass || todaySlots[1];
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const todayName = dayNames[new Date().getDay()];
+      const todaySlots = timetable
+        .filter(t => t.dayOfWeek === todayName)
+        .slice()
+        .sort((a, b) => a.startTime.localeCompare(b.startTime));
+      const next = nextClass || todaySlots[0];
+
+      if (!next) {
+        return {
+          id: `ai-msg-${Date.now()}`,
+          sender: 'assistant',
+          text: `You have no more classes scheduled today (${todayName}). Enjoy the rest of your day!`,
+          timestamp: 'Just now',
+          dataSources: ['Timetable']
+        };
+      }
 
       return {
         id: `ai-msg-${Date.now()}`,
         sender: 'assistant',
-        text: `Your next lecture is **${next.subjectName}** (${next.subjectCode}) with **${next.faculty}**.\n\n- **Time:** ${next.startTime} – ${next.endTime}\n- **Room:** ${next.room}\n- **Type:** ${next.type}\n- **Status:** Upcoming\n\n**Today's Full Monday Schedule:**\n` +
-          todaySlots.map(s => `• **${s.startTime} – ${s.endTime}**: ${s.subjectName} (${s.room}, ${s.faculty})`).join('\n'),
+        text: `Your next lecture is **${next.subjectName}** (${next.subjectCode}) with **${next.faculty}**.\n\n- **Time:** ${next.startTime} – ${next.endTime}\n- **Room:** ${next.room}\n- **Type:** ${next.type}\n- **Status:** Upcoming\n\n**${todayName}'s Schedule:**\n` +
+          (todaySlots.length > 0
+            ? todaySlots.map(s => `• **${s.startTime} – ${s.endTime}**: ${s.subjectName} (${s.room}, ${s.faculty})`).join('\n')
+            : 'No more classes today.'),
         timestamp: 'Just now',
         dataSources: ['Timetable']
       };
     }
 
-    // 4.1 CAN I SKIP CLASS? (CRITICAL ATTENDANCE PREDICTION USE CASE)
+    // 4.1 CAN I SKIP CLASS? (ATTENDANCE PREDICTION — resolved from live records)
     if (
       query.includes('skip') ||
       query.includes('miss class') ||
       query.includes('can i miss') ||
       query.includes('bunk')
     ) {
-      const isWebDev = query.includes('web') || query.includes('cs304');
-      const targetCode = isWebDev ? 'CS304' : 'CS302';
-      const impact = store.calculateSkipImpact(targetCode);
-      const subjectName = impact.record?.subjectName || 'DBMS';
+      // Try to resolve the subject named in the question against real records;
+      // otherwise analyze the weakest subject.
+      const tokens = query.replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(t => t.length >= 3);
+      let resolved = null as null | { subjectCode: string };
+      for (const token of tokens) {
+        const hit = store.getAttendanceRecord(token);
+        if (hit) {
+          resolved = { subjectCode: hit.subjectCode };
+          break;
+        }
+      }
+      if (!resolved) {
+        const weakest = attendance.slice().sort((a, b) => a.percentage - b.percentage)[0];
+        if (weakest) resolved = { subjectCode: weakest.subjectCode };
+      }
+      if (!resolved) {
+        return {
+          id: `ai-msg-${Date.now()}`,
+          sender: 'assistant',
+          text: `I couldn't find your attendance records in the live campus data. Please check your connection and try again.`,
+          timestamp: 'Just now',
+          dataSources: ['Attendance']
+        };
+      }
+      const impact = store.calculateSkipImpact(resolved.subjectCode);
+      const subjectName = impact.record?.subjectName || resolved.subjectCode;
 
       return {
         id: `ai-msg-${Date.now()}`,
@@ -218,10 +285,12 @@ export class CampusAIAgent {
         text: `Your attendance is currently at risk in **${atRisk.length} subjects**:\n\n` +
           atRisk.map(a => `• **${a.subjectName} (${a.subjectCode})**: **${a.percentage}%** (${a.attendedClasses}/${a.totalClasses} classes) — *Requires ${a.requiredClassesToReach75} consecutive classes to reach 75%*`).join('\n') +
           `\n\n**Actionable AI Recommendations:**\n` +
-          `1. **Attend your next 3 DBMS classes** to halt further grade deduction.\n` +
-          `2. **Avoid missing consecutive sessions** on Thursdays and Fridays.\n` +
-          `3. **Consider recorded lectures & remedial hours** hosted by Prof. Verma.\n` +
-          `4. **Set automated reminders** 30 minutes before 10:30 AM lectures.`,
+          (atRisk.length > 0
+            ? `1. **Attend your upcoming ${atRisk[0].subjectName} classes** (${atRisk[0].requiredClassesToReach75} consecutive needed) to halt further slide.\n`
+            : `1. **Keep your streak going** — all subjects currently meet the 75% requirement.\n`) +
+          `2. **Avoid missing consecutive sessions** of the same subject.\n` +
+          `3. **Ask your faculty mentor${student.mentor ? ` (${student.mentor})` : ''}** about remedial hours for weak subjects.\n` +
+          `4. **Set reminders** 30 minutes before your morning lectures.`,
         timestamp: 'Just now',
         dataSources: ['Attendance Risk Engine', 'Faculty Registry']
       };
@@ -311,12 +380,27 @@ export class CampusAIAgent {
       query.includes('quiet place') ||
       query.includes('where can i study')
     ) {
+      if (facilities.length === 0) {
+        return {
+          id: `ai-msg-${Date.now()}`,
+          sender: 'assistant',
+          text: `No study spaces are listed in the live campus data right now. Please check back later.`,
+          timestamp: 'Just now',
+          dataSources: ['Campus Facilities', 'Library Registry']
+        };
+      }
+      const ranked = facilities
+        .slice()
+        .sort((a, b) => a.walkTimeFromRoom204Min - b.walkTimeFromRoom204Min)
+        .slice(0, 3);
       return {
         id: `ai-msg-${Date.now()}`,
         sender: 'assistant',
-        text: `Here are the top available study spaces on campus right now:\n\n1. **${facilities[0].name}**\n   - **Available:** ${facilities[0].availableSeats} / ${facilities[0].capacity} seats (${facilities[0].occupancyPercentage}% full)\n   - **Atmosphere:** Silent Zone, Power outlets at every desk\n   - **Distance:** 5 min walk from Room 204\n\n2. **${facilities[1].name}**\n   - **Available:** ${facilities[1].availableSeats} / ${facilities[1].capacity} seats (${facilities[1].occupancyPercentage}% full)\n   - **Atmosphere:** Quiet collaborative, Whiteboards, AC\n   - **Distance:** 1 min walk from Room 204\n\n*Central Library has ${library.availability.availablePercentage}% total seats open right now.*`,
+        text: `Here are the top available study spaces on campus right now:\n\n` +
+          ranked.map((f, i) => `${i + 1}. **${f.name}**\n   - **Available:** ${f.availableSeats} / ${f.capacity} seats (${f.occupancyPercentage}% full)\n   - **Amenities:** ${(f.amenities ?? []).join(', ') || 'See facility details'}\n   - **Walk:** ~${f.walkTimeFromRoom204Min} min`).join('\n\n') +
+          `\n\n*Central Library has ${library.availability.availablePercentage}% total seats open right now.*`,
         timestamp: 'Just now',
-        dataSources: ['Campus Facilities IoT Sensors', 'Library Registry']
+        dataSources: ['Campus Facilities', 'Library Registry']
       };
     }
 

@@ -16,88 +16,100 @@ import {
   NotificationItem,
   TicketCategory,
   TicketPriority,
-  TicketStatus
 } from '../types';
 import {
-  INITIAL_STUDENT,
-  INITIAL_TIMETABLE,
-  INITIAL_ATTENDANCE,
-  INITIAL_GRADES,
-  INITIAL_DEADLINES,
-  INITIAL_EVENTS,
-  INITIAL_CANTEEN_STATUS,
-  INITIAL_CANTEEN_MENU,
-  INITIAL_FACILITIES,
-  INITIAL_LIBRARY_BOOKS,
-  INITIAL_LIBRARY_AVAILABILITY,
-  INITIAL_TRANSPORT,
-  INITIAL_HELPDESK_TICKETS,
-  INITIAL_NOTIFICATIONS
-} from './mockData';
-import { isSupabaseConfigured } from './supabaseClient';
+  CampusApiError,
+  createTicket as apiCreateTicket,
+  currentUserId,
+  fetchAttendance,
+  fetchCanteen,
+  fetchDeadlines,
+  fetchEvents,
+  fetchFacilities,
+  fetchGrades,
+  fetchLibrary,
+  fetchNotifications,
+  fetchStudent,
+  fetchTickets,
+  fetchTimetable,
+  fetchTransport,
+  markAllNotificationsRead as apiMarkAllRead,
+  markNotificationRead as apiMarkRead,
+  setDeadlineCompletion,
+  setEventRegistration,
+} from './campusApi';
+import { subscribeStudentRealtime } from './realtime';
+
+/**
+ * Campus data store. Supabase is the SOLE source of truth:
+ *
+ * - No mock data, no localStorage campus cache, no hardcoded identity.
+ * - `load()` fetches every slice from Supabase; ANY failure puts the store
+ *   in `error` status so the UI renders a real connection-error state.
+ * - Mutations await Supabase confirmation, then refresh the affected slice
+ *   from the server. Nothing reports success unless confirmed.
+ * - Realtime subscriptions refresh slices live; background refresh failures
+ *   set the `stale` flag (confirmed data stays visible, flagged as stale).
+ */
+
+export type CampusStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 interface CampusState {
-  student: Student;
+  student: Student | null;
   timetable: TimetableSlot[];
   attendance: AttendanceRecord[];
   grades: GradeItem[];
   deadlines: DeadlineItem[];
   events: EventItem[];
-  canteenStatus: CanteenStatus;
+  canteenStatus: CanteenStatus | null;
   canteenMenu: CanteenMenuItem[];
   facilities: FacilityItem[];
   libraryBooks: LibraryBook[];
-  libraryAvailability: LibrarySeatAvailability;
+  libraryAvailability: LibrarySeatAvailability | null;
   transport: TransportRoute[];
   tickets: HelpdeskTicket[];
   notifications: NotificationItem[];
 }
 
-const STORAGE_KEY = 'campusos_store_v1';
+function emptyState(): CampusState {
+  return {
+    student: null,
+    timetable: [],
+    attendance: [],
+    grades: [],
+    deadlines: [],
+    events: [],
+    canteenStatus: null,
+    canteenMenu: [],
+    facilities: [],
+    libraryBooks: [],
+    libraryAvailability: null,
+    transport: [],
+    tickets: [],
+    notifications: [],
+  };
+}
+
+const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function toMinutes(t: string): number {
+  const [h, m] = t.split(':').map((n) => parseInt(n, 10));
+  return h * 60 + (m || 0);
+}
 
 class CampusDataStore {
-  private state: CampusState;
+  private state: CampusState = emptyState();
   private listeners: Set<() => void> = new Set();
+  private unsubscribeRealtime: (() => void) | null = null;
+  private catalogTimer: ReturnType<typeof setTimeout> | null = null;
+  private privateTimer: ReturnType<typeof setTimeout> | null = null;
+  private loading = false;
 
-  constructor() {
-    this.state = this.loadState();
-  }
-
-  private loadState(): CampusState {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        return JSON.parse(stored);
-      }
-    } catch (e) {
-      console.warn('Could not read CampusOS state from localStorage:', e);
-    }
-    return {
-      student: INITIAL_STUDENT,
-      timetable: INITIAL_TIMETABLE,
-      attendance: INITIAL_ATTENDANCE,
-      grades: INITIAL_GRADES,
-      deadlines: INITIAL_DEADLINES,
-      events: INITIAL_EVENTS,
-      canteenStatus: INITIAL_CANTEEN_STATUS,
-      canteenMenu: INITIAL_CANTEEN_MENU,
-      facilities: INITIAL_FACILITIES,
-      libraryBooks: INITIAL_LIBRARY_BOOKS,
-      libraryAvailability: INITIAL_LIBRARY_AVAILABILITY,
-      transport: INITIAL_TRANSPORT,
-      tickets: INITIAL_HELPDESK_TICKETS,
-      notifications: INITIAL_NOTIFICATIONS
-    };
-  }
-
-  private persist() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
-    } catch (e) {
-      console.error('Failed to save CampusOS state to localStorage:', e);
-    }
-    this.notify();
-  }
+  public status: CampusStatus = 'idle';
+  public error: string | null = null;
+  public stale = false;
+  public lastSync: number | null = null;
 
   public subscribe(listener: () => void) {
     this.listeners.add(listener);
@@ -107,80 +119,277 @@ class CampusDataStore {
   }
 
   private notify() {
-    this.listeners.forEach(cb => cb());
+    this.listeners.forEach((cb) => cb());
   }
 
-  // --- Getters ---
+  private setStatus(status: CampusStatus, error: string | null = null) {
+    this.status = status;
+    this.error = error;
+    this.notify();
+  }
 
-  public getStudent(): Student {
+  // --- Loading -----------------------------------------------------------
+
+  /** Full authoritative load. Throws nothing; reports via status/error. */
+  public async load(): Promise<void> {
+    if (this.loading) return;
+    this.loading = true;
+    this.setStatus('loading');
+    try {
+      const uid = await currentUserId();
+      const [
+        student,
+        timetable,
+        attendance,
+        grades,
+        deadlines,
+        events,
+        canteen,
+        facilities,
+        library,
+        transport,
+        tickets,
+        notifications,
+      ] = await Promise.all([
+        fetchStudent(),
+        fetchTimetable(),
+        fetchAttendance(),
+        fetchGrades(),
+        fetchDeadlines(),
+        fetchEvents(),
+        fetchCanteen(),
+        fetchFacilities(),
+        fetchLibrary(),
+        fetchTransport(),
+        fetchTickets(),
+        fetchNotifications(),
+      ]);
+      this.state = {
+        student,
+        timetable,
+        attendance,
+        grades,
+        deadlines,
+        events,
+        canteenStatus: canteen.status,
+        canteenMenu: canteen.menu,
+        facilities,
+        libraryBooks: library.books,
+        libraryAvailability: library.availability,
+        transport,
+        tickets,
+        notifications,
+      };
+      this.stale = false;
+      this.lastSync = Date.now();
+      this.startRealtime(uid);
+      this.setStatus('ready');
+    } catch (e) {
+      this.stopRealtime();
+      const message =
+        e instanceof CampusApiError
+          ? e.message
+          : 'Unable to connect to campus services. Check your connection and try again.';
+      this.setStatus('error', message);
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  public async retry(): Promise<void> {
+    await this.load();
+  }
+
+  /** Clears all campus data (logout). No local persistence remains. */
+  public reset() {
+    this.stopRealtime();
+    if (this.catalogTimer) clearTimeout(this.catalogTimer);
+    if (this.privateTimer) clearTimeout(this.privateTimer);
+    this.catalogTimer = null;
+    this.privateTimer = null;
+    this.state = emptyState();
+    this.stale = false;
+    this.lastSync = null;
+    this.setStatus('idle');
+  }
+
+  // --- Realtime ----------------------------------------------------------
+
+  private startRealtime(uid: string) {
+    this.stopRealtime();
+    this.unsubscribeRealtime = subscribeStudentRealtime(uid, {
+      onCatalogChanged: () => {
+        if (this.catalogTimer) clearTimeout(this.catalogTimer);
+        this.catalogTimer = setTimeout(() => {
+          void this.refreshCatalog();
+        }, 400);
+      },
+      onPrivateChanged: () => {
+        if (this.privateTimer) clearTimeout(this.privateTimer);
+        this.privateTimer = setTimeout(() => {
+          void this.refreshPrivate();
+        }, 400);
+      },
+    });
+  }
+
+  private stopRealtime() {
+    try {
+      this.unsubscribeRealtime?.();
+    } catch {
+      /* ignore */
+    }
+    this.unsubscribeRealtime = null;
+  }
+
+  private async refreshCatalog(): Promise<void> {
+    if (this.status !== 'ready') return;
+    try {
+      const [timetable, deadlines, events, canteen, facilities, library, transport] = await Promise.all([
+        fetchTimetable(),
+        fetchDeadlines(),
+        fetchEvents(),
+        fetchCanteen(),
+        fetchFacilities(),
+        fetchLibrary(),
+        fetchTransport(),
+      ]);
+      this.state.timetable = timetable;
+      this.state.deadlines = deadlines;
+      this.state.events = events;
+      this.state.canteenStatus = canteen.status;
+      this.state.canteenMenu = canteen.menu;
+      this.state.facilities = facilities;
+      this.state.libraryBooks = library.books;
+      this.state.libraryAvailability = library.availability;
+      this.state.transport = transport;
+      this.stale = false;
+      this.lastSync = Date.now();
+      this.notify();
+    } catch {
+      this.stale = true;
+      this.notify();
+    }
+  }
+
+  private async refreshPrivate(): Promise<void> {
+    if (this.status !== 'ready') return;
+    try {
+      const [student, attendance, grades, tickets, notifications] = await Promise.all([
+        fetchStudent(),
+        fetchAttendance(),
+        fetchGrades(),
+        fetchTickets(),
+        fetchNotifications(),
+      ]);
+      this.state.student = student;
+      this.state.attendance = attendance;
+      this.state.grades = grades;
+      this.state.tickets = tickets;
+      this.state.notifications = notifications;
+      this.stale = false;
+      this.lastSync = Date.now();
+      this.notify();
+    } catch {
+      this.stale = true;
+      this.notify();
+    }
+  }
+
+  // --- Getters (valid only once status is 'ready'; the data gate enforces this) ---
+
+  private requireReady(): void {
+    if (this.status !== 'ready') {
+      throw new Error('Campus data is not loaded.');
+    }
+  }
+
+  private requireStudent(): Student {
+    this.requireReady();
+    if (!this.state.student) throw new Error('Student profile is not loaded.');
     return this.state.student;
   }
 
+  public getStudent(): Student {
+    return this.requireStudent();
+  }
+
   public getTimetable(): TimetableSlot[] {
+    this.requireReady();
     return this.state.timetable;
   }
 
   public getAttendance(): AttendanceRecord[] {
+    this.requireReady();
     return this.state.attendance;
   }
 
   public getGrades(): GradeItem[] {
+    this.requireReady();
     return this.state.grades;
   }
 
   public getDeadlines(): DeadlineItem[] {
+    this.requireReady();
     return this.state.deadlines;
   }
 
   public getEvents(): EventItem[] {
+    this.requireReady();
     return this.state.events;
   }
 
   public getCanteen(): { status: CanteenStatus; menu: CanteenMenuItem[] } {
-    return {
-      status: this.state.canteenStatus,
-      menu: this.state.canteenMenu
-    };
+    this.requireReady();
+    if (!this.state.canteenStatus) throw new Error('Canteen data is not loaded.');
+    return { status: this.state.canteenStatus, menu: this.state.canteenMenu };
   }
 
   public getFacilities(): FacilityItem[] {
+    this.requireReady();
     return this.state.facilities;
   }
 
   public getLibrary(): { books: LibraryBook[]; availability: LibrarySeatAvailability } {
-    return {
-      books: this.state.libraryBooks,
-      availability: this.state.libraryAvailability
-    };
+    this.requireReady();
+    if (!this.state.libraryAvailability) throw new Error('Library data is not loaded.');
+    return { books: this.state.libraryBooks, availability: this.state.libraryAvailability };
   }
 
   public getTransport(): TransportRoute[] {
+    this.requireReady();
     return this.state.transport;
   }
 
   public getTickets(): HelpdeskTicket[] {
+    this.requireReady();
     return this.state.tickets;
   }
 
   public getTicketById(id: string): HelpdeskTicket | undefined {
-    return this.state.tickets.find(t => t.id.toLowerCase() === id.toLowerCase());
+    if (this.status !== 'ready') return undefined;
+    return this.state.tickets.find((t) => t.id.toLowerCase() === id.toLowerCase());
   }
 
   public getNotifications(): NotificationItem[] {
+    if (this.status !== 'ready') return [];
     return this.state.notifications;
   }
 
   public getAttendanceRecord(subjectCodeOrId: string): AttendanceRecord | undefined {
+    if (this.status !== 'ready') return undefined;
     const clean = subjectCodeOrId.trim().toLowerCase();
     return this.state.attendance.find(
-      a => a.subjectCode.toLowerCase() === clean || 
-           a.id.toLowerCase() === clean || 
-           a.subjectName.toLowerCase().includes(clean)
+      (a) =>
+        a.subjectCode.toLowerCase() === clean ||
+        a.id.toLowerCase() === clean ||
+        a.subjectName.toLowerCase().includes(clean)
     );
   }
 
   public getAtRiskSubjects(): AttendanceRecord[] {
-    return this.state.attendance.filter(a => a.isLow || a.percentage < 75);
+    if (this.status !== 'ready') return [];
+    return this.state.attendance.filter((a) => a.isLow || a.percentage < 75);
   }
 
   public calculateSkipImpact(subjectCode: string): {
@@ -192,261 +401,121 @@ class CampusDataStore {
   } {
     const record = this.getAttendanceRecord(subjectCode);
     if (!record) {
-      return {
-        canSkip: false,
-        currentPct: 0,
-        newPctIfSkipped: 0,
-        classesRequiredFor75: 0
-      };
+      return { canSkip: false, currentPct: 0, newPctIfSkipped: 0, classesRequiredFor75: 0 };
     }
-
     const currentPct = record.percentage;
     const newTotal = record.totalClasses + 1;
-    const newAttended = record.attendedClasses;
-    const newPctIfSkipped = Math.round((newAttended / newTotal) * 1000) / 10; // e.g. 66.7%
-
-    // Calculate consecutive classes needed to reach 75%
-    // (attended + x) / (total + x) >= 0.75
-    // attended + x >= 0.75 * total + 0.75 * x
-    // 0.25 * x >= 0.75 * total - attended
-    // x >= (0.75 * total - attended) / 0.25 = 3 * total - 4 * attended
+    const newPctIfSkipped = Math.round((record.attendedClasses / newTotal) * 1000) / 10;
+    // (attended + x) / (total + x) >= 0.75  →  x >= 3*total - 4*attended
     const needed = Math.max(0, Math.ceil(3 * record.totalClasses - 4 * record.attendedClasses));
-
-    return {
-      record,
-      canSkip: currentPct >= 75 && newPctIfSkipped >= 75,
-      currentPct,
-      newPctIfSkipped,
-      classesRequiredFor75: needed
-    };
+    return { record, canSkip: currentPct >= 75 && newPctIfSkipped >= 75, currentPct, newPctIfSkipped, classesRequiredFor75: needed };
   }
 
-  // Dynamic next/current class calculation
+  /**
+   * Current/next class derived from the REAL timetable and the actual
+   * current day/time — no hardcoded subjects, rooms, or demo windows.
+   */
   public getCurrentOrNextClass(): {
     currentClass?: TimetableSlot;
     nextClass?: TimetableSlot;
     remainingMinutesToNext?: number;
     daySchedule: TimetableSlot[];
   } {
-    // We base calculations on Monday slots for deterministic hackathon demo or current day
-    const daySchedule = this.state.timetable.filter(t => t.dayOfWeek === 'Monday');
-    
-    // In demo flow: Next class is DBMS at 10:30 AM Room 204 Prof Verma
-    const nextClass = daySchedule.find(t => t.subjectCode === 'CS302') || daySchedule[1];
-    const currentClass = daySchedule.find(t => t.subjectCode === 'CS301');
+    if (this.status !== 'ready') return { daySchedule: [] };
+    const now = new Date();
+    const todayName = DAY_NAMES[now.getDay()];
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const byStart = (a: TimetableSlot, b: TimetableSlot) => toMinutes(a.startTime) - toMinutes(b.startTime);
 
-    return {
-      currentClass,
-      nextClass,
-      remainingMinutesToNext: 120, // 2 hours window for the demo
-      daySchedule
-    };
-  }
-
-  // --- Mutations ---
-
-  public toggleDeadline(id: string): DeadlineItem | undefined {
-    const item = this.state.deadlines.find(d => d.id === id);
-    if (!item) return undefined;
-
-    item.status = item.status === 'Completed' ? 'Pending' : 'Completed';
-    this.persist();
-    return item;
-  }
-
-  public toggleEventRegistration(eventId: string): { success: boolean; isRegistered: boolean; event?: EventItem } {
-    const event = this.state.events.find(e => e.id === eventId);
-    if (!event) return { success: false, isRegistered: false };
-
-    event.isRegistered = !event.isRegistered;
-    if (event.isRegistered) {
-      event.registeredCount = Math.min(event.maxSeats, event.registeredCount + 1);
-      this.addNotification({
-        title: 'Event Registration Confirmed',
-        message: `You are successfully registered for "${event.title}". Venue: ${event.location}.`,
-        type: 'event',
-        actionLink: { view: 'events', id: event.id }
-      });
+    const todaySlots = this.state.timetable.filter((t) => t.dayOfWeek === todayName).sort(byStart);
+    const currentClass = todaySlots.find((s) => toMinutes(s.startTime) <= nowMin && nowMin < toMinutes(s.endTime));
+    let nextClass = todaySlots.find((s) => toMinutes(s.startTime) > nowMin);
+    let remainingMinutesToNext: number | undefined;
+    if (nextClass) {
+      remainingMinutesToNext = Math.max(0, toMinutes(nextClass.startTime) - nowMin);
     } else {
-      event.registeredCount = Math.max(0, event.registeredCount - 1);
+      const startIdx = DAY_ORDER.indexOf(todayName);
+      for (let i = 1; i <= 7; i += 1) {
+        const day = DAY_ORDER[(startIdx + i + 7) % DAY_ORDER.length] ?? todayName;
+        const slots = this.state.timetable.filter((t) => t.dayOfWeek === day).sort(byStart);
+        if (slots.length > 0) {
+          nextClass = slots[0];
+          break;
+        }
+      }
     }
-
-    this.persist();
-    return { success: true, isRegistered: event.isRegistered, event };
+    return { currentClass, nextClass, remainingMinutesToNext, daySchedule: todaySlots };
   }
 
-  public createHelpdeskTicket(params: {
+  // --- Mutations (all confirmed by Supabase; state refreshes from server) ---
+
+  public async toggleDeadline(id: string): Promise<DeadlineItem> {
+    const item = this.state.deadlines.find((d) => d.id === id);
+    if (!item || !item.uuid) throw new CampusApiError('Deadline not found. Please reload and try again.');
+    const target = item.status !== 'Completed';
+    await setDeadlineCompletion(item.uuid, target);
+    await this.refreshCatalog();
+    const updated = this.state.deadlines.find((d) => d.id === id);
+    if (!updated) throw new CampusApiError('Deadline status could not be confirmed. Please reload.');
+    return updated;
+  }
+
+  public async toggleEventRegistration(
+    eventId: string
+  ): Promise<{ success: boolean; isRegistered: boolean; event?: EventItem; error?: string }> {
+    const event = this.state.events.find((e) => e.id === eventId);
+    if (!event || !event.uuid) {
+      return { success: false, isRegistered: false, error: 'Event not found. Please reload and try again.' };
+    }
+    try {
+      const target = !event.isRegistered;
+      await setEventRegistration(event.uuid, target);
+      await this.refreshCatalog();
+      const updated = this.state.events.find((e) => e.id === eventId);
+      return { success: true, isRegistered: updated?.isRegistered ?? target, event: updated };
+    } catch (e) {
+      const message =
+        e instanceof CampusApiError ? e.message : 'Registration could not be completed. Please try again.';
+      return { success: false, isRegistered: event.isRegistered, error: message };
+    }
+  }
+
+  /**
+   * Creates a REAL ticket in Supabase. Resolves with the confirmed record
+   * (server-assigned display id + trigger-written timeline) or throws —
+   * callers must only show success on resolve.
+   */
+  public async createHelpdeskTicket(params: {
     title: string;
     description: string;
     location: string;
     category: TicketCategory;
     priority: TicketPriority;
-  }): HelpdeskTicket {
-    // Generate sequential or realistic ID starting with HD-1042
-    let nextIdNumber = 1042;
-    const existingIds = this.state.tickets
-      .map(t => parseInt(t.id.replace('HD-', ''), 10))
-      .filter(n => !isNaN(n));
-    
-    if (existingIds.length > 0) {
-      nextIdNumber = Math.max(...existingIds) + 1;
-    }
-
-    const newTicketId = `HD-${nextIdNumber}`;
-    const nowIso = new Date().toISOString();
-    const formattedDate = new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-
-    const newTicket: HelpdeskTicket = {
-      id: newTicketId,
-      studentId: this.state.student.id,
-      studentName: this.state.student.name,
-      title: params.title,
-      description: params.description,
-      location: params.location,
-      category: params.category,
-      priority: params.priority,
-      status: 'Pending',
-      createdAt: nowIso,
-      updatedAt: nowIso,
-      timeline: [
-        {
-          step: 'Created',
-          timestamp: formattedDate,
-          note: `Issue reported by ${this.state.student.name}`
-        }
-      ]
-    };
-
-    this.state.tickets.unshift(newTicket);
-
-    // Also push a notification
-    this.addNotification({
-      title: `Ticket Logged: ${newTicketId}`,
-      message: `Your issue regarding "${params.title}" at ${params.location} is logged. Status: Pending.`,
-      type: 'ticket',
-      actionLink: { view: 'helpdesk', id: newTicketId }
-    });
-
-    this.persist();
-    return newTicket;
+  }): Promise<HelpdeskTicket> {
+    const ticket = await apiCreateTicket(params);
+    await this.refreshPrivate();
+    return this.state.tickets.find((t) => t.id === ticket.id) ?? ticket;
   }
 
-  public updateTicketStatus(id: string, status: TicketStatus, note?: string): HelpdeskTicket | undefined {
-    const ticket = this.getTicketById(id);
-    if (!ticket) return undefined;
-
-    ticket.status = status;
-    ticket.updatedAt = new Date().toISOString();
-    const formattedDate = new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-
-    ticket.timeline.push({
-      step: status === 'In Progress' ? 'In Progress' : status === 'Resolved' ? 'Resolved' : 'Assigned',
-      timestamp: formattedDate,
-      note: note || `Ticket status updated to ${status}`
-    });
-
-    this.addNotification({
-      title: `Ticket ${id} ${status}`,
-      message: note || `Your ticket regarding "${ticket.title}" is now ${status}.`,
-      type: 'ticket',
-      actionLink: { view: 'helpdesk', id }
-    });
-
-    this.persist();
-    return ticket;
-  }
-
-  public addNotification(notif: {
-    title: string;
-    message: string;
-    type: NotificationItem['type'];
-    actionLink?: NotificationItem['actionLink'];
-  }) {
-    const newNotif: NotificationItem = {
-      id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-      title: notif.title,
-      message: notif.message,
-      timestamp: 'Just now',
-      isRead: false,
-      type: notif.type,
-      actionLink: notif.actionLink
-    };
-    this.state.notifications.unshift(newNotif);
-    this.persist();
-  }
-
-  public markNotificationRead(id: string) {
-    const notif = this.state.notifications.find(n => n.id === id);
-    if (notif && !notif.isRead) {
-      notif.isRead = true;
-      this.persist();
-    }
-  }
-
-  public markAllNotificationsRead() {
-    this.state.notifications.forEach(n => { n.isRead = true; });
-    this.persist();
-  }
-
-  public resetToDefaults() {
-    localStorage.removeItem(STORAGE_KEY);
-    this.state = this.loadState();
-    this.persist();
-  }
-
-  /**
-   * Pull public catalog + demo-student data from Supabase and replace the
-   * matching local slices. Offline-first: any fetch that fails (or RLS-denied
-   * for anon, e.g. tickets/notifications) keeps the local mock data, so the
-   * UI never breaks. Authenticated sessions unlock owner-scoped rows.
-   */
-  public async hydrateFromSupabase(): Promise<{ applied: string[]; skipped: string[] }> {
-    const applied: string[] = [];
-    const skipped: string[] = [];
-    if (!isSupabaseConfigured) {
-      return { applied, skipped: ['supabase-not-configured'] };
-    }
+  public async markNotificationRead(id: string): Promise<void> {
+    const notif = this.state.notifications.find((n) => n.id === id);
+    if (!notif || notif.isRead) return;
     try {
-      const api = await import('./campusApi');
-      const [student, timetable, attendance, grades, deadlines, events, canteen, facilities, library, transport] =
-        await Promise.all([
-          api.fetchStudent().catch(() => null),
-          api.fetchTimetable().catch(() => null),
-          api.fetchAttendance().catch(() => null),
-          api.fetchGrades().catch(() => null),
-          api.fetchDeadlines().catch(() => null),
-          api.fetchEvents().catch(() => null),
-          api.fetchCanteen().catch(() => null),
-          api.fetchFacilities().catch(() => null),
-          api.fetchLibrary().catch(() => null),
-          api.fetchTransport().catch(() => null),
-        ]);
-
-      if (student) { this.state.student = student; applied.push('student'); } else skipped.push('student');
-      if (timetable && timetable.length > 0) { this.state.timetable = timetable; applied.push('timetable'); } else skipped.push('timetable');
-      if (attendance && attendance.length > 0) { this.state.attendance = attendance; applied.push('attendance'); } else skipped.push('attendance');
-      if (grades && grades.length > 0) { this.state.grades = grades; applied.push('grades'); } else skipped.push('grades');
-      if (deadlines && deadlines.length > 0) { this.state.deadlines = deadlines; applied.push('deadlines'); } else skipped.push('deadlines');
-      if (events && events.length > 0) { this.state.events = events; applied.push('events'); } else skipped.push('events');
-      if (canteen) { this.state.canteenStatus = canteen.status; this.state.canteenMenu = canteen.menu; applied.push('canteen'); } else skipped.push('canteen');
-      if (facilities && facilities.length > 0) { this.state.facilities = facilities; applied.push('facilities'); } else skipped.push('facilities');
-      if (library) { this.state.libraryBooks = library.books; this.state.libraryAvailability = library.availability; applied.push('library'); } else skipped.push('library');
-      if (transport && transport.length > 0) { this.state.transport = transport; applied.push('transport'); } else skipped.push('transport');
-
-      // Owner-scoped slices require an authenticated session (anon is RLS-denied by design).
-      const [tickets, notifications] = await Promise.all([
-        api.fetchTickets().catch(() => null),
-        api.fetchNotifications().catch(() => null),
-      ]);
-      if (tickets && tickets.length > 0) { this.state.tickets = tickets; applied.push('tickets'); } else skipped.push('tickets(auth-required)');
-      if (notifications && notifications.length > 0) { this.state.notifications = notifications; applied.push('notifications'); } else skipped.push('notifications(auth-required)');
-
-      this.persist();
-    } catch (e) {
-      console.warn('[CampusOS] Supabase hydrate failed, keeping offline data:', e);
-      skipped.push('hydrate-error');
+      if (!notif.uuid) return;
+      await apiMarkRead(notif.uuid);
+      await this.refreshPrivate();
+    } catch {
+      /* read-receipt failed: UI keeps the unread state (truthful), no throw */
     }
-    return { applied, skipped };
+  }
+
+  public async markAllNotificationsRead(): Promise<void> {
+    try {
+      await apiMarkAllRead();
+      await this.refreshPrivate();
+    } catch {
+      /* UI keeps current state on failure */
+    }
   }
 }
 
@@ -458,7 +527,7 @@ export function useCampusStore() {
 
   useEffect(() => {
     return campusStore.subscribe(() => {
-      setTick(t => t + 1);
+      setTick((t) => t + 1);
     });
   }, []);
 

@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate } from 'react-router-dom';
 import { AuthService } from './services/authService';
-import { campusStore } from './services/campusStore';
 import { AdminApp } from './components/admin/AdminApp';
+import { StudentDataGate } from './components/common/StudentDataGate';
 import { NavSection } from './types';
 import { PortalSelect } from './components/auth/PortalSelect';
 import { StudentLogin } from './components/auth/StudentLogin';
@@ -36,20 +36,11 @@ const StudentApp: React.FC = () => {
     }
   }, [flowState]);
 
-  // Hydrate offline-first store from Supabase (public catalog; owner rows after Auth).
-  useEffect(() => {
-    let cancelled = false;
-    if (AuthService.isAuthenticated()) {
-      void campusStore.hydrateFromSupabase().then((res) => {
-        if (!cancelled && import.meta.env.DEV && res.applied.length > 0) {
-          console.info('[CampusOS] Supabase hydrate applied:', res.applied.join(', '));
-        }
-      });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [flowState]);
+  const handleSessionInvalid = () => {
+    setFlowState('portal-select');
+    setCurrentSection('dashboard');
+    setNavigationMeta({});
+  };
 
   const handleNavigate = (
     section: NavSection,
@@ -92,13 +83,14 @@ const StudentApp: React.FC = () => {
     );
   }
 
-  // 3. Authenticated Student Application
+  // 3. Authenticated Student Application (data gated on live Supabase)
   return (
-    <StudentShell
-      currentSection={currentSection}
-      onNavigate={handleNavigate}
-      onLogout={handleLogout}
-    >
+    <StudentDataGate onSessionInvalid={handleSessionInvalid}>
+      <StudentShell
+        currentSection={currentSection}
+        onNavigate={handleNavigate}
+        onLogout={handleLogout}
+      >
       {currentSection === 'dashboard' && (
         <DashboardView onNavigate={handleNavigate} />
       )}
@@ -128,7 +120,8 @@ const StudentApp: React.FC = () => {
           initialTicketId={navigationMeta.id}
         />
       )}
-    </StudentShell>
+      </StudentShell>
+    </StudentDataGate>
   );
 };
 

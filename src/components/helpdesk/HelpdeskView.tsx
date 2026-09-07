@@ -44,6 +44,7 @@ export const HelpdeskView: React.FC<HelpdeskViewProps> = ({ initialTab = 'ticket
   const [priority, setPriority] = useState<TicketPriority>('Medium');
   const [submittedTicket, setSubmittedTicket] = useState<HelpdeskTicket | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const categories: TicketCategory[] = [
     'Maintenance',
@@ -65,7 +66,7 @@ export const HelpdeskView: React.FC<HelpdeskViewProps> = ({ initialTab = 'ticket
     'Seminar Hall B'
   ];
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
 
@@ -74,21 +75,31 @@ export const HelpdeskView: React.FC<HelpdeskViewProps> = ({ initialTab = 'ticket
       return;
     }
 
-    const created = store.createHelpdeskTicket({
-      title: title.trim(),
-      description: description.trim(),
-      location: location.trim(),
-      category,
-      priority
-    });
+    setSubmitting(true);
+    try {
+      // Confirmed by Supabase (row + server-assigned ID + timeline) before success UI.
+      const created = await store.createHelpdeskTicket({
+        title: title.trim(),
+        description: description.trim(),
+        location: location.trim(),
+        category,
+        priority
+      });
 
-    setSubmittedTicket(created);
-    // Reset inputs
-    setTitle('');
-    setDescription('');
-    setLocation('');
-    setCategory('Maintenance');
-    setPriority('Medium');
+      setSubmittedTicket(created);
+      // Reset inputs
+      setTitle('');
+      setDescription('');
+      setLocation('');
+      setCategory('Maintenance');
+      setPriority('Medium');
+    } catch (err) {
+      setFormError(
+        err instanceof Error ? err.message : 'Ticket could not be created. Check your connection and try again.'
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   // Filter student tickets
@@ -102,9 +113,12 @@ export const HelpdeskView: React.FC<HelpdeskViewProps> = ({ initialTab = 'ticket
     switch (status) {
       case 'Pending':
         return 'text-amber-400 bg-amber-500/10 border-amber-500/20';
+      case 'Assigned':
+        return 'text-violet-400 bg-violet-500/10 border-violet-500/20';
       case 'In Progress':
         return 'text-blue-400 bg-blue-500/10 border-blue-500/20';
       case 'Resolved':
+      case 'Closed':
         return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
     }
   };
@@ -346,10 +360,11 @@ export const HelpdeskView: React.FC<HelpdeskViewProps> = ({ initialTab = 'ticket
               <div className="pt-3">
                 <button
                   type="submit"
-                  className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-semibold shadow-glow-sm transition-all flex items-center justify-center gap-2"
+                  disabled={submitting}
+                  className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-semibold shadow-glow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-wait"
                 >
                   <PlusCircle className="w-4 h-4" />
-                  <span>Report Problem</span>
+                  <span>{submitting ? 'Logging Ticket…' : 'Report Problem'}</span>
                 </button>
               </div>
             </form>
@@ -369,7 +384,7 @@ export const HelpdeskView: React.FC<HelpdeskViewProps> = ({ initialTab = 'ticket
               <Filter className="w-4 h-4 text-slate-400" />
               <span className="text-xs font-semibold text-slate-300">Status:</span>
               <div className="flex flex-wrap gap-1.5">
-                {(['All', 'Pending', 'In Progress', 'Resolved'] as const).map((st) => (
+                {(['All', 'Pending', 'Assigned', 'In Progress', 'Resolved', 'Closed'] as const).map((st) => (
                   <button
                     key={st}
                     onClick={() => setStatusFilter(st)}

@@ -77,6 +77,7 @@ export interface GradeItem {
 
 export interface DeadlineItem {
   id: string;
+  uuid?: string; // database row id (UI id may be a legacy display id)
   title: string;
   category: 'Assignment' | 'Book' | 'Form' | 'Event';
   dueDate: string; // YYYY-MM-DD or readable
@@ -88,6 +89,7 @@ export interface DeadlineItem {
 
 export interface EventItem {
   id: string;
+  uuid?: string; // database row id (UI id may be a legacy display id)
   title: string;
   description: string;
   date: string;
@@ -182,7 +184,7 @@ export type TicketCategory =
 
 export type TicketPriority = 'Low' | 'Medium' | 'High';
 
-export type TicketStatus = 'Pending' | 'In Progress' | 'Resolved';
+export type TicketStatus = 'Pending' | 'Assigned' | 'In Progress' | 'Resolved' | 'Closed';
 
 export interface TicketTimelineStep {
   step: 'Created' | 'Assigned' | 'In Progress' | 'Resolved';
@@ -192,6 +194,7 @@ export interface TicketTimelineStep {
 
 export interface HelpdeskTicket {
   id: string; // e.g. "HD-1042"
+  uuid?: string; // database row id
   studentId: string;
   studentName: string;
   title: string;
@@ -207,6 +210,7 @@ export interface HelpdeskTicket {
 
 export interface NotificationItem {
   id: string;
+  uuid?: string; // database row id
   title: string;
   message: string;
   timestamp: string;

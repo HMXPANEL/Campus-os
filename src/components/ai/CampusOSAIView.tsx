@@ -85,48 +85,60 @@ export const CampusOSAIView: React.FC<CampusOSAIViewProps> = ({ initialPrompt, o
     }
   };
 
-  const handleConfirmTicket = (msgId: string) => {
+  const handleConfirmTicket = async (msgId: string) => {
     const targetMsg = messages.find(m => m.id === msgId);
     if (!targetMsg || !targetMsg.actionCard) return;
 
     const draft = targetMsg.actionCard.draft;
-    // Create real ticket in unified campus store
-    const ticket = store.createHelpdeskTicket({
-      title: draft.title,
-      description: draft.description,
-      location: draft.location,
-      category: draft.category,
-      priority: draft.priority
-    });
+    try {
+      // Create a REAL ticket in Supabase — confirmed before claiming success.
+      const ticket = await store.createHelpdeskTicket({
+        title: draft.title,
+        description: draft.description,
+        location: draft.location,
+        category: draft.category,
+        priority: draft.priority
+      });
 
-    // Update message state in-place
-    setMessages(prev => prev.map(m => {
-      if (m.id === msgId) {
-        return {
-          ...m,
-          actionCard: {
-            ...m.actionCard!,
-            status: 'confirmed',
-            createdTicketId: ticket.id
+      // Update message state in-place
+      setMessages(prev => prev.map(m => {
+        if (m.id === msgId) {
+          return {
+            ...m,
+            actionCard: {
+              ...m.actionCard!,
+              status: 'confirmed',
+              createdTicketId: ticket.id
+            }
+          };
+        }
+        return m;
+      }));
+
+      // Post AI confirmation in the stream
+      setTimeout(() => {
+        setMessages(prev => [
+          ...prev,
+          {
+            id: `confirm-msg-${Date.now()}`,
+            sender: 'assistant',
+            text: `✓ **Ticket Created Successfully!**\n\n- **Ticket ID:** \`${ticket.id}\`\n- **Category:** ${ticket.category}\n- **Location:** ${ticket.location}\n- **Status:** **Pending** *(Assigned to Facilities Maintenance)*\n\nThe issue has been registered in the campus queue. You can monitor progress anytime under **Helpdesk ➔ My Tickets**.`,
+            timestamp: 'Just now',
+            dataSources: ['Helpdesk System']
           }
-        };
-      }
-      return m;
-    }));
-
-    // Post AI confirmation in the stream
-    setTimeout(() => {
+        ]);
+      }, 400);
+    } catch (err) {
       setMessages(prev => [
         ...prev,
         {
-          id: `confirm-msg-${Date.now()}`,
+          id: `err-${Date.now()}`,
           sender: 'assistant',
-          text: `✓ **Ticket Created Successfully!**\n\n- **Ticket ID:** \`${ticket.id}\`\n- **Category:** ${ticket.category}\n- **Location:** ${ticket.location}\n- **Status:** **Pending** *(Assigned to Facilities Maintenance)*\n\nThe issue has been registered in the campus queue. You can monitor progress anytime under **Helpdesk ➔ My Tickets**.`,
-          timestamp: 'Just now',
-          dataSources: ['Helpdesk System']
+          text: `I couldn't log that ticket: ${err instanceof Error ? err.message : 'connection failed'}\n\nNo ticket was created. Please check your connection and try again.`,
+          timestamp: 'Just now'
         }
       ]);
-    }, 400);
+    }
   };
 
   const handleCancelTicket = (msgId: string) => {

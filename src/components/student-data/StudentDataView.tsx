@@ -137,7 +137,7 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({ initialTab = '
             <div className="space-y-2.5 relative before:absolute before:left-3.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-800">
               {filteredTimetable.map((slot) => {
                 const isCompleted = slot.status === 'Completed';
-                const isNext = slot.subjectCode === 'CS302';
+                const isNext = store.getCurrentOrNextClass().nextClass?.id === slot.id;
 
                 return (
                   <div
@@ -360,7 +360,7 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({ initialTab = '
                 >
                   <div className="flex items-start gap-3">
                     <button
-                      onClick={() => store.toggleDeadline(dl.id)}
+                      onClick={() => { void store.toggleDeadline(dl.id).catch(() => {}); }}
                       className={`w-5 h-5 rounded-md border flex items-center justify-center mt-0.5 transition-colors ${
                         isCompleted
                           ? 'bg-emerald-600 border-emerald-500 text-white'
@@ -393,7 +393,7 @@ export const StudentDataView: React.FC<StudentDataViewProps> = ({ initialTab = '
                   </div>
 
                   <button
-                    onClick={() => store.toggleDeadline(dl.id)}
+                    onClick={() => { void store.toggleDeadline(dl.id).catch(() => {}); }}
                     className="text-[11px] text-blue-400 hover:text-blue-300 font-semibold shrink-0"
                   >
                     {isCompleted ? 'Undo' : 'Done'}

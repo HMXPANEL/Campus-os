@@ -25,6 +25,8 @@ export const EventsView: React.FC<EventsViewProps> = ({ initialEventId }) => {
   const [activeTab, setActiveTab] = useState<'upcoming' | 'past'>('upcoming');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busyEventId, setBusyEventId] = useState<string | null>(null);
   const [selectedEventModal, setSelectedEventModal] = useState<EventItem | null>(() => {
     if (initialEventId) {
       return events.find(e => e.id === initialEventId) || null;
@@ -47,19 +49,30 @@ export const EventsView: React.FC<EventsViewProps> = ({ initialEventId }) => {
     return matchTab && matchCategory && matchSearch;
   });
 
-  const handleRegisterToggle = (eventId: string) => {
-    const res = store.toggleEventRegistration(eventId);
-    if (res.success && res.isRegistered) {
-      // Trigger celebratory confetti
-      confetti({
-        particleCount: 75,
-        spread: 70,
-        origin: { y: 0.7 }
-      });
-    }
+  const handleRegisterToggle = async (eventId: string) => {
+    setActionError(null);
+    setBusyEventId(eventId);
+    try {
+      // Confirmed by Supabase (row + capacity guard) before any UI claims success.
+      const res = await store.toggleEventRegistration(eventId);
+      if (!res.success) {
+        setActionError(res.error || 'Registration could not be completed. Please try again.');
+        return;
+      }
+      if (res.isRegistered) {
+        // Trigger celebratory confetti only on confirmed registration
+        confetti({
+          particleCount: 75,
+          spread: 70,
+          origin: { y: 0.7 }
+        });
+      }
 
-    if (selectedEventModal && selectedEventModal.id === eventId) {
-      setSelectedEventModal(res.event || null);
+      if (selectedEventModal && selectedEventModal.id === eventId) {
+        setSelectedEventModal(res.event || null);
+      }
+    } finally {
+      setBusyEventId(null);
     }
   };
 
@@ -138,6 +151,11 @@ export const EventsView: React.FC<EventsViewProps> = ({ initialEventId }) => {
       </div>
 
       {/* Event Cards Grid */}
+      {actionError && (
+        <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs">
+          {actionError}
+        </div>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {filteredEvents.length === 0 ? (
           <div className="col-span-full p-16 text-center glass-panel rounded-3xl">
@@ -232,8 +250,9 @@ export const EventsView: React.FC<EventsViewProps> = ({ initialEventId }) => {
                   </button>
 
                   <button
-                    onClick={() => handleRegisterToggle(event.id)}
-                    className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 shadow-sm ${
+                    onClick={() => void handleRegisterToggle(event.id)}
+                    disabled={busyEventId === event.id}
+                    className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-60 disabled:cursor-wait ${
                       event.isRegistered
                         ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 hover:bg-rose-500/20 hover:text-rose-300 hover:border-rose-500/30'
                         : 'bg-blue-600 hover:bg-blue-500 text-white shadow-glow-sm'

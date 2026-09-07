@@ -25,7 +25,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const student = store.getStudent();
   const deadlines = store.getDeadlines();
   const events = store.getEvents();
-  const timetable = store.getTimetable();
   const { nextClass } = store.getCurrentOrNextClass();
 
   const [isAttendanceModalOpen, setIsAttendanceModalOpen] = useState(false);
@@ -35,7 +34,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const atRiskList = store.getAtRiskSubjects();
   const pendingDeadlines = deadlines.filter(d => d.status === 'Pending').slice(0, 2);
   const upcomingEvents = events.slice(0, 2);
-  const todaySlots = timetable.filter(t => t.dayOfWeek === 'Monday');
+  const { daySchedule: todaySlots } = store.getCurrentOrNextClass();
 
   const handleAiSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -184,7 +183,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                 </span>
               </div>
               <p className="text-xs text-slate-200 mt-1 leading-relaxed">
-                Attend your next <strong className="text-white font-bold underline">3 DBMS classes</strong> to move closer to the 75% requirement.
+                Attend your next <strong className="text-white font-bold underline">{atRiskList[0].requiredClassesToReach75} {atRiskList[0].subjectName} classes</strong> to move closer to the 75% requirement.
               </p>
             </div>
           </div>
@@ -208,13 +207,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             <Clock className="w-5 h-5" />
           </div>
 
+          {nextClass ? (
           <div>
             <div className="flex items-center gap-2 mb-1">
               <span className="text-xs text-slate-400 font-semibold uppercase tracking-wider">
                 Next Class
-              </span>
-              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                Starts in 1h 10m
               </span>
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">
                 Upcoming
@@ -222,24 +219,39 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
 
             <h3 className="text-base font-bold text-white">
-              {nextClass?.subjectName || 'Database Management Systems'} ({nextClass?.subjectCode || 'CS302'})
+              {nextClass.subjectName} ({nextClass.subjectCode})
             </h3>
 
             <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 mt-1.5">
               <span className="flex items-center gap-1 text-slate-300">
                 <Clock className="w-3 h-3 text-blue-400" />
-                {nextClass?.startTime || '10:30'} – {nextClass?.endTime || '11:30 AM'}
+                {nextClass.startTime} – {nextClass.endTime}
               </span>
               <span className="flex items-center gap-1 text-slate-300">
                 <MapPin className="w-3 h-3 text-blue-400" />
-                {nextClass?.room || 'Room 204'}
+                {nextClass.room}
               </span>
               <span className="flex items-center gap-1 text-slate-300">
                 <User className="w-3 h-3 text-blue-400" />
-                {nextClass?.faculty || 'Prof. Verma'}
+                {nextClass.faculty}
               </span>
             </div>
           </div>
+          ) : (
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs text-slate-400 font-semibold uppercase tracking-wider">
+                Next Class
+              </span>
+            </div>
+            <h3 className="text-base font-bold text-white">
+              No more classes scheduled
+            </h3>
+            <p className="text-xs text-slate-400 mt-1">
+              Check your full timetable for upcoming days.
+            </p>
+          </div>
+          )}
         </div>
 
         <button
@@ -252,8 +264,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       </div>
 
       {/* ============================================================ */}
-      {/* 5. AI RECOMMENDATION COMPACT CARD */}
+      {/* 5. AI RECOMMENDATION COMPACT CARD (live next class + top deadline) */}
       {/* ============================================================ */}
+      {(nextClass || pendingDeadlines.length > 0) && (
       <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-indigo-950/30 via-slate-900/90 to-blue-950/30 border border-indigo-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
         <div className="flex items-start gap-3">
           <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shrink-0 mt-0.5 shadow-sm">
@@ -264,7 +277,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               <span>CampusOS AI noticed something</span>
             </span>
             <p className="text-xs text-slate-200 mt-1 leading-relaxed">
-              You have a <strong>2-hour gap</strong> before DBMS and an assignment due tomorrow.
+              {nextClass && pendingDeadlines.length > 0 && (
+                <>You have <strong>{nextClass.subjectName}</strong> coming up and <strong>{pendingDeadlines[0].title}</strong> is still pending.</>
+              )}
+              {nextClass && pendingDeadlines.length === 0 && (
+                <>You have <strong>{nextClass.subjectName}</strong> coming up. Ask AI to help you prepare.</>
+              )}
+              {!nextClass && pendingDeadlines.length > 0 && (
+                <><strong>{pendingDeadlines[0].title}</strong> is still pending. Ask AI to help you plan.</>
+              )}
             </p>
           </div>
         </div>
@@ -277,6 +298,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           <ArrowRight className="w-3.5 h-3.5" />
         </button>
       </div>
+      )}
 
       {/* ============================================================ */}
       {/* 6. TODAY'S CLASSES (DAILY TIMETABLE TIMELINE) */}
@@ -285,7 +307,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         <div className="flex items-center justify-between mb-3.5">
           <div>
             <h3 className="text-sm font-bold text-white tracking-tight">Today's Classes</h3>
-            <span className="text-[11px] text-slate-400 font-mono">Mon, 8 Sep 2026</span>
+            <span className="text-[11px] text-slate-400 font-mono">{new Date().toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span>
           </div>
           <button
             onClick={() => onNavigate('student-data', { tab: 'timetable' })}
@@ -299,7 +321,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         <div className="space-y-2 relative before:absolute before:left-3.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-800">
           {todaySlots.map((slot) => {
             const isCompleted = slot.status === 'Completed';
-            const isNext = slot.subjectCode === 'CS302';
+            const isNext = nextClass !== undefined && slot.id === nextClass.id;
 
             return (
               <div

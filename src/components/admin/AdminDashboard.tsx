@@ -1,14 +1,27 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, Calendar, GraduationCap, LifeBuoy, RefreshCw, TrendingUp, Users } from 'lucide-react';
-import { getDashboardMetrics, type AdminDashboardMetrics } from '../../services/adminApi';
+import { AlertTriangle, GraduationCap, LifeBuoy, RefreshCw, TrendingUp, Users, BarChart3, Activity } from 'lucide-react';
+import { getDashboardMetrics, type AdminDashboardMetrics, getAttendanceDistribution, getTicketStatusDistribution, getEventRegistrationData, type AttendanceDistribution, type TicketStatusData, type EventRegistrationData } from '../../services/adminApi';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
+} from 'recharts';
 
-/**
- * Phase 1 Admin Dashboard: five live metrics from Supabase.
- * Fail-closed: errors render an error state — never mock data, never the
- * student offline fallback.
- */
+const ATTENDANCE_COLORS = ['#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16', '#22c55e', '#16a34a'];
+
 export const AdminDashboard: React.FC = () => {
   const [metrics, setMetrics] = useState<AdminDashboardMetrics | null>(null);
+  const [attendanceDist, setAttendanceDist] = useState<AttendanceDistribution[]>([]);
+  const [ticketStatus, setTicketStatus] = useState<TicketStatusData[]>([]);
+  const [eventRegData, setEventRegData] = useState<EventRegistrationData[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -16,9 +29,21 @@ export const AdminDashboard: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      setMetrics(await getDashboardMetrics());
+      const [metricsData, attendanceDistData, ticketStatusData, eventRegData] = await Promise.all([
+        getDashboardMetrics(),
+        getAttendanceDistribution(),
+        getTicketStatusDistribution(),
+        getEventRegistrationData(),
+      ]);
+      setMetrics(metricsData);
+      setAttendanceDist(attendanceDistData);
+      setTicketStatus(ticketStatusData);
+      setEventRegData(eventRegData);
     } catch (e) {
       setMetrics(null);
+      setAttendanceDist([]);
+      setTicketStatus([]);
+      setEventRegData([]);
       setError(e instanceof Error ? e.message : 'Could not load dashboard metrics.');
     } finally {
       setLoading(false);
@@ -86,11 +111,98 @@ export const AdminDashboard: React.FC = () => {
     },
   ];
 
+  const attendanceChart = attendanceDist.length > 0 ? (
+    <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800">
+      <div className="flex items-center gap-2 mb-4">
+        <BarChart3 className="w-4 h-4 text-blue-400" />
+        <h2 className="text-sm font-bold text-white">Attendance Distribution</h2>
+      </div>
+      <div className="h-64">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={attendanceDist} layout="vertical">
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+            <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+            <YAxis dataKey="range" type="category" tick={{ fill: '#94a3b8', fontSize: 11 }} width={80} />
+            <Tooltip
+              formatter={(value) => [String(value), 'records']}
+              contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px' }}
+            />
+            <Bar dataKey="count" radius={[0, 4, 4, 0]}>
+              {attendanceDist.map((_, index) => (
+                <Cell key={`cell-${index}`} fill={ATTENDANCE_COLORS[index % ATTENDANCE_COLORS.length]} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <p className="text-xs text-slate-500 mt-2 text-center">Attendance records grouped by percentage range</p>
+    </div>
+  ) : null;
+
+  const ticketStatusChart = ticketStatus.length > 0 ? (
+    <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800">
+      <div className="flex items-center gap-2 mb-4">
+        <PieChart className="w-4 h-4 text-amber-400" />
+        <h2 className="text-sm font-bold text-white">Ticket Status</h2>
+      </div>
+      <div className="h-64 flex items-center justify-center">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={ticketStatus}
+              cx="50%"
+              cy="50%"
+              innerRadius={60}
+              outerRadius={80}
+              dataKey="count"
+              nameKey="status"
+              label={({ payload }) => `${payload.status}: ${payload.count}`}
+              labelLine={false}
+            >
+              {ticketStatus.map((entry) => (
+                <Cell key={entry.status} fill={entry.color} />
+              ))}
+            </Pie>
+            <Tooltip
+              formatter={(value) => [String(value), 'tickets']}
+              contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px' }}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  ) : null;
+
+  const eventRegChart = eventRegData.length > 0 ? (
+    <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800">
+      <div className="flex items-center gap-2 mb-4">
+        <Activity className="w-4 h-4 text-pink-400" />
+        <h2 className="text-sm font-bold text-white">Event Registrations</h2>
+      </div>
+      <div className="h-64">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={eventRegData} layout="vertical">
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+            <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+            <YAxis dataKey="event" type="category" tick={{ fill: '#94a3b8', fontSize: 11 }} width={120} />
+            <Tooltip
+              formatter={(value, name) => [String(value), name]}
+              contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px' }}
+            />
+            <Legend />
+            <Bar dataKey="registered" radius={[0, 4, 4, 0]} fill="#3b82f6" name="Registered" />
+            <Bar dataKey="capacity" radius={[0, 4, 4, 0]} fill="#1e293b" name="Capacity" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold text-white tracking-tight">Operations Overview</h1>
-        <p className="text-xs text-slate-400 mt-1">Live campus metrics from Supabase · Phase 1</p>
+        <p className="text-xs text-slate-400 mt-1">Live campus metrics from Supabase · Phase 2</p>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -111,30 +223,38 @@ export const AdminDashboard: React.FC = () => {
         })}
       </div>
 
-      <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800">
-        <div className="flex items-center gap-2 mb-4">
-          <Calendar className="w-4 h-4 text-blue-400" />
-          <h2 className="text-sm font-bold text-white">Upcoming Events</h2>
-        </div>
-        {metrics.upcomingEvents.length === 0 ? (
-          <p className="text-xs text-slate-500">No upcoming events published.</p>
-        ) : (
-          <div className="divide-y divide-slate-800/70">
-            {metrics.upcomingEvents.map((event) => (
-              <div key={event.id} className="py-3 flex items-center justify-between gap-3 first:pt-0 last:pb-0">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-white truncate">{event.title}</div>
-                  <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                    {event.dateText} &bull; {event.location}
-                  </div>
-                </div>
-                <span className="text-[11px] text-slate-400 font-mono shrink-0">
-                  {event.registeredCount}/{event.maxSeats}
-                </span>
-              </div>
-            ))}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {attendanceChart}
+        {ticketStatusChart}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {eventRegChart}
+        <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800">
+          <div className="flex items-center gap-2 mb-4">
+            <BarChart3 className="w-4 h-4 text-blue-400" />
+            <h2 className="text-sm font-bold text-white">Upcoming Events</h2>
           </div>
-        )}
+          {metrics.upcomingEvents.length === 0 ? (
+            <p className="text-xs text-slate-500">No upcoming events published.</p>
+          ) : (
+            <div className="divide-y divide-slate-800/70">
+              {metrics.upcomingEvents.map((event) => (
+                <div key={event.id} className="py-3 flex items-center justify-between gap-3 first:pt-0 last:pb-0">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-white truncate">{event.title}</div>
+                    <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                      {event.dateText} &bull; {event.location}
+                    </div>
+                  </div>
+                  <span className="text-[11px] text-slate-400 font-mono shrink-0">
+                    {event.registeredCount}/{event.maxSeats}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="flex items-center gap-2 text-[11px] text-slate-600">

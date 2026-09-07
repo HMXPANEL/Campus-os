@@ -94,8 +94,16 @@ export const AttendanceInsightsModal: React.FC<AttendanceInsightsModalProps> = (
           <div className="p-3 rounded-xl bg-slate-950/50 border border-slate-800/80 flex items-start gap-2.5 text-xs text-slate-200">
             <CheckCircle2 className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
             <div>
-              <span className="font-semibold block text-white">Attend next 3 DBMS classes</span>
-              <span className="text-[11px] text-slate-400">Halts further percentage decline and moves you to ~70%.</span>
+              <span className="font-semibold block text-white">
+                {atRisk.length > 0
+                  ? `Attend your next ${atRisk[0].requiredClassesToReach75} ${atRisk[0].subjectName} classes`
+                  : 'Keep your attendance streak going'}
+              </span>
+              <span className="text-[11px] text-slate-400">
+                {atRisk.length > 0
+                  ? `Halts further decline and moves you toward the 75% requirement (currently ${atRisk[0].percentage}%).`
+                  : 'All subjects currently meet the 75% requirement.'}
+              </span>
             </div>
           </div>
 
@@ -111,7 +119,7 @@ export const AttendanceInsightsModal: React.FC<AttendanceInsightsModalProps> = (
             <Video className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
             <div>
               <span className="font-semibold block text-white">Use weekend remedial sessions</span>
-              <span className="text-[11px] text-slate-400">Prof. Verma hosts compensation lectures every Saturday.</span>
+              <span className="text-[11px] text-slate-400">Ask your faculty mentor about compensation lectures for weak subjects.</span>
             </div>
           </div>
 
@@ -119,7 +127,7 @@ export const AttendanceInsightsModal: React.FC<AttendanceInsightsModalProps> = (
             <BellRing className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div>
               <span className="font-semibold block text-white">Set timetable push reminders</span>
-              <span className="text-[11px] text-slate-400">CampusOS can alert you 30m before Room 204 lectures.</span>
+              <span className="text-[11px] text-slate-400">CampusOS can alert you before your morning lectures.</span>
             </div>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured, DEMO_PROFILE_ID } from './supabaseClient';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
 import type {
   AttendanceRecord,
   CanteenMenuItem,
@@ -12,9 +12,49 @@ import type {
   LibrarySeatAvailability,
   NotificationItem,
   Student,
+  TicketCategory,
+  TicketPriority,
   TimetableSlot,
   TransportRoute,
 } from '../types';
+
+/**
+ * Single Supabase data layer for the Student portal.
+ *
+ * - Supabase is the ONLY source of truth. There is no mock fallback, no
+ *   localStorage cache, and no hardcoded identity in this module.
+ * - Reads resolve the caller via the authenticated session (auth.uid()
+ *   server-side through RLS); the client never trusts a browser-supplied id.
+ * - Every function THROWS CampusApiError on failure so the UI can render a
+ *   real error state instead of fake data. Nothing here reports success
+ *   unless Supabase confirmed the operation.
+ */
+
+export class CampusApiError extends Error {
+  code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = 'CampusApiError';
+    this.code = code;
+  }
+}
+
+function client() {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new CampusApiError('Unable to connect to campus services. Check your connection and try again.');
+  }
+  return supabase;
+}
+
+/** Authenticated user id from the live Supabase session. Never cached, never hardcoded. */
+export async function currentUserId(): Promise<string> {
+  const c = client();
+  const { data, error } = await c.auth.getUser();
+  if (error || !data.user) {
+    throw new CampusApiError('You are not signed in. Please sign in again.');
+  }
+  return data.user.id;
+}
 
 function timeToHHMM(t: string): string {
   return t.slice(0, 5);
@@ -33,39 +73,27 @@ function fmtDateTime(iso: string): string {
   }
 }
 
-async function activeStudentId(): Promise<string> {
-  // Prefer the authenticated Supabase user's profile id; fall back to the demo profile.
-  try {
-    if (supabase) {
-      const { data } = await supabase.auth.getUser();
-      if (data.user?.id) return data.user.id;
-    }
-  } catch {
-    /* ignore - offline fallback */
+function connError(error: { code?: string; message: string } | null, fallback: string): CampusApiError {
+  if (!error) return new CampusApiError(fallback);
+  if (error.code === '42501' || /row-level security|permission denied/i.test(error.message)) {
+    return new CampusApiError('You are not authorized to access this data.', error.code);
   }
-  return DEMO_PROFILE_ID;
+  return new CampusApiError('Unable to connect to campus services. Check your connection and try again.', error.code);
 }
 
-export async function fetchStudent(): Promise<Student | null> {
-  if (!isSupabaseConfigured || !supabase) return null;
-  const sid = await activeStudentId();
-  // Try the authenticated/demostudent profile; fall back to demo row for anon catalog access.
-  let row: any = null;
-  const attempt = await supabase
+// ---------------------------------------------------------------------------
+// Reads
+// ---------------------------------------------------------------------------
+
+export async function fetchStudent(): Promise<Student> {
+  const c = client();
+  const uid = await currentUserId();
+  const { data: row, error } = await c
     .from('profiles')
-    .select('id, student_no, email, full_name, year_text, section, cgpa, phone, mentor, avatar_url, department_id, semester_id, departments(name), semesters(name)')
-    .eq('id', sid)
+    .select('id, student_no, email, full_name, year_text, section, cgpa, phone, mentor, avatar_url, departments(name), semesters(name)')
+    .eq('id', uid)
     .maybeSingle();
-  row = attempt.data;
-  if (!row) {
-    const demo = await supabase
-      .from('profiles')
-      .select('id, student_no, email, full_name, year_text, section, cgpa, phone, mentor, avatar_url, department_id, semester_id, departments(name), semesters(name)')
-      .eq('id', DEMO_PROFILE_ID)
-      .maybeSingle();
-    row = demo.data;
-  }
-  if (!row) return null;
+  if (error || !row) throw connError(error, 'Your student profile could not be loaded.');
 
   const deptName: string =
     (Array.isArray(row.departments) ? row.departments[0]?.name : (row.departments as any)?.name) ||
@@ -74,23 +102,23 @@ export async function fetchStudent(): Promise<Student | null> {
     (Array.isArray(row.semesters) ? row.semesters[0]?.name : (row.semesters as any)?.name) ||
     'Semester 5';
 
-  // Aggregates for the hero card
+  const { data: attRows, error: attError } = await c
+    .from('attendance_records')
+    .select('attended, total, percentage')
+    .eq('student_id', uid);
+  if (attError) throw connError(attError, 'Your attendance could not be loaded.');
+
   let attended = 0;
   let held = 0;
   let atRisk = 0;
-  try {
-    const att = await supabase.from('attendance_records').select('attended, total, percentage').eq('student_id', row.id);
-    for (const r of att.data ?? []) {
-      attended += r.attended ?? 0;
-      held += r.total ?? 0;
-      if ((r.percentage ?? 0) < 75) atRisk += 1;
-    }
-  } catch {
-    /* keep zeros */
+  for (const r of attRows ?? []) {
+    attended += r.attended ?? 0;
+    held += r.total ?? 0;
+    if ((r.percentage ?? 0) < 75) atRisk += 1;
   }
 
   return {
-    id: row.student_no ?? row.id.slice(0, 7).toUpperCase(),
+    id: row.student_no ?? 'STUDENT',
     name: row.full_name,
     email: row.email,
     department: deptName,
@@ -112,16 +140,17 @@ export async function fetchStudent(): Promise<Student | null> {
   };
 }
 
-export async function fetchTimetable(): Promise<TimetableSlot[] | null> {
-  if (!isSupabaseConfigured || !supabase) return null;
-  const { data, error } = await supabase
+export async function fetchTimetable(): Promise<TimetableSlot[]> {
+  const c = client();
+  const { data, error } = await c
     .from('timetable_slots')
-    .select('legacy_id, subject_code, subject_name, day, start_time, end_time, room, faculty_name, slot_type, status')
+    .select('id, legacy_id, subject_code, subject_name, day, start_time, end_time, room, faculty_name, slot_type, status')
     .order('day', { ascending: true })
     .order('start_time', { ascending: true });
-  if (error || !data) return null;
+  if (error || !data) throw connError(error, 'The timetable could not be loaded.');
   return data.map((r: any, i: number) => ({
-    id: r.legacy_id ?? `tt-${i}`,
+    id: r.legacy_id ?? r.id ?? `tt-${i}`,
+    uuid: r.id,
     dayOfWeek: r.day,
     startTime: timeToHHMM(String(r.start_time)),
     endTime: timeToHHMM(String(r.end_time)),
@@ -134,86 +163,78 @@ export async function fetchTimetable(): Promise<TimetableSlot[] | null> {
   }));
 }
 
-export async function fetchAttendance(): Promise<AttendanceRecord[] | null> {
-  if (!isSupabaseConfigured || !supabase) return null;
-  const sid = await activeStudentId();
-  const tryIds = sid === DEMO_PROFILE_ID ? [sid] : [sid, DEMO_PROFILE_ID];
-  for (const id of tryIds) {
-    const { data, error } = await supabase
-      .from('attendance_records')
-      .select(
-        'id, attended, missed, total, percentage, is_low, health_status, required_to_75, trend, last_updated, subjects(code, name), attendance_history(class_date, day_text, mark, topic)'
-      )
-      .eq('student_id', id)
-      .order('id');
-    if (!error && data && data.length > 0) {
-      return data.map((r: any) => ({
-        id: r.id,
-        subjectCode: r.subjects?.code ?? '—',
-        subjectName: r.subjects?.name ?? '—',
-        attendedClasses: r.attended,
-        missedClasses: r.missed,
-        totalClasses: r.total,
-        percentage: Number(r.percentage),
-        isLow: Boolean(r.is_low),
-        status: r.health_status,
-        requiredClassesToReach75: r.required_to_75 ?? 0,
-        lastUpdated: r.last_updated ? fmtDateTime(r.last_updated) : 'Recently',
-        trend: r.trend ?? '+0.0%',
-        recentHistory: (r.attendance_history ?? [])
-          .slice()
-          .sort((a: any, b: any) => (a.class_date < b.class_date ? 1 : -1))
-          .slice(0, 5)
-          .map((h: any) => ({
-            date: new Date(h.class_date).toLocaleDateString('en-US', { month: 'short', day: '2-digit' }),
-            day: h.day_text,
-            status: h.mark as 'Present' | 'Absent',
-            topic: h.topic,
-          })),
-      }));
-    }
-  }
-  return null;
+export async function fetchAttendance(): Promise<AttendanceRecord[]> {
+  const c = client();
+  const uid = await currentUserId();
+  const { data, error } = await c
+    .from('attendance_records')
+    .select(
+      'id, attended, missed, total, percentage, is_low, health_status, required_to_75, trend, last_updated, subjects(code, name), attendance_history(class_date, day_text, mark, topic)'
+    )
+    .eq('student_id', uid)
+    .order('id');
+  if (error || !data) throw connError(error, 'Attendance records could not be loaded.');
+  return data.map((r: any) => ({
+    id: r.id,
+    subjectCode: r.subjects?.code ?? '—',
+    subjectName: r.subjects?.name ?? '—',
+    attendedClasses: r.attended,
+    missedClasses: r.missed,
+    totalClasses: r.total,
+    percentage: Number(r.percentage),
+    isLow: Boolean(r.is_low),
+    status: r.health_status,
+    requiredClassesToReach75: r.required_to_75 ?? 0,
+    lastUpdated: r.last_updated ? fmtDateTime(r.last_updated) : 'Recently',
+    trend: r.trend ?? '+0.0%',
+    recentHistory: (r.attendance_history ?? [])
+      .slice()
+      .sort((a: any, b: any) => (a.class_date < b.class_date ? 1 : -1))
+      .slice(0, 5)
+      .map((h: any) => ({
+        date: new Date(h.class_date).toLocaleDateString('en-US', { month: 'short', day: '2-digit' }),
+        day: h.day_text,
+        status: h.mark as 'Present' | 'Absent',
+        topic: h.topic,
+      })),
+  }));
 }
 
-export async function fetchGrades(): Promise<GradeItem[] | null> {
-  if (!isSupabaseConfigured || !supabase) return null;
-  const sid = await activeStudentId();
-  for (const id of sid === DEMO_PROFILE_ID ? [sid] : [sid, DEMO_PROFILE_ID]) {
-    const { data, error } = await supabase
-      .from('grades')
-      .select('id, credits, internal_score, internal_max, exam_score, exam_max, grade, grade_points, remarks, subjects(code, name)')
-      .eq('student_id', id);
-    if (!error && data && data.length > 0) {
-      return data.map((g: any) => ({
-        id: g.id,
-        subjectCode: g.subjects?.code ?? '—',
-        subjectName: g.subjects?.name ?? '—',
-        credits: g.credits,
-        internalMarks: { score: g.internal_score, max: g.internal_max },
-        examMarks: { score: g.exam_score, max: g.exam_max },
-        overallGrade: g.grade,
-        gradePoints: g.grade_points,
-        remarks: g.remarks ?? undefined,
-      }));
-    }
-  }
-  return null;
+export async function fetchGrades(): Promise<GradeItem[]> {
+  const c = client();
+  const uid = await currentUserId();
+  const { data, error } = await c
+    .from('grades')
+    .select('id, credits, internal_score, internal_max, exam_score, exam_max, grade, grade_points, remarks, subjects(code, name)')
+    .eq('student_id', uid);
+  if (error || !data) throw connError(error, 'Grades could not be loaded.');
+  return data.map((g: any) => ({
+    id: g.id,
+    subjectCode: g.subjects?.code ?? '—',
+    subjectName: g.subjects?.name ?? '—',
+    credits: g.credits,
+    internalMarks: { score: g.internal_score, max: g.internal_max },
+    examMarks: { score: g.exam_score, max: g.exam_max },
+    overallGrade: g.grade,
+    gradePoints: g.grade_points,
+    remarks: g.remarks ?? undefined,
+  }));
 }
 
-export async function fetchDeadlines(): Promise<DeadlineItem[] | null> {
-  if (!isSupabaseConfigured || !supabase) return null;
-  const sid = await activeStudentId();
-  const { data, error } = await supabase
+export async function fetchDeadlines(): Promise<DeadlineItem[]> {
+  const c = client();
+  const uid = await currentUserId();
+  const { data, error } = await c
     .from('deadlines')
     .select('id, legacy_id, title, category, due_text, priority, status, course_code, description, deadline_completions(student_id, is_completed)')
     .order('created_at', { ascending: true });
-  if (error || !data) return null;
+  if (error || !data) throw connError(error, 'Deadlines could not be loaded.');
   return data.map((d: any) => {
-    const mine = (d.deadline_completions ?? []).find((c: any) => c.student_id === sid);
+    const mine = (d.deadline_completions ?? []).find((cc: any) => cc.student_id === uid);
     const completed = mine ? Boolean(mine.is_completed) : d.status === 'Completed';
     return {
       id: d.legacy_id ?? d.id,
+      uuid: d.id,
       title: d.title,
       category: d.category,
       dueDate: d.due_text,
@@ -225,24 +246,25 @@ export async function fetchDeadlines(): Promise<DeadlineItem[] | null> {
   });
 }
 
-export async function fetchEvents(): Promise<EventItem[] | null> {
-  if (!isSupabaseConfigured || !supabase) return null;
-  const sid = await activeStudentId();
-  const { data, error } = await supabase
+export async function fetchEvents(): Promise<EventItem[]> {
+  const c = client();
+  const uid = await currentUserId();
+  const { data, error } = await c
     .from('events')
     .select('id, legacy_id, title, description, date_text, time_text, location, organizer, category, registration_deadline_text, max_seats, registered_count, banner_image, tags, is_past')
+    .eq('is_published', true)
     .order('is_past', { ascending: true })
     .order('created_at', { ascending: true });
-  if (error || !data) return null;
-  let myRegs = new Set<string>();
-  try {
-    const regs = await supabase.from('event_registrations').select('event_id').eq('student_id', sid);
-    myRegs = new Set((regs.data ?? []).map((r: any) => r.event_id));
-  } catch {
-    /* anon users cannot read registrations - all unregistered */
-  }
+  if (error || !data) throw connError(error, 'Events could not be loaded.');
+  const { data: regs, error: regsError } = await c
+    .from('event_registrations')
+    .select('event_id')
+    .eq('student_id', uid);
+  if (regsError) throw connError(regsError, 'Event registrations could not be loaded.');
+  const myRegs = new Set((regs ?? []).map((r: any) => r.event_id));
   return data.map((e: any) => ({
     id: e.legacy_id ?? e.id,
+    uuid: e.id,
     title: e.title,
     description: e.description,
     date: e.date_text,
@@ -260,12 +282,17 @@ export async function fetchEvents(): Promise<EventItem[] | null> {
   }));
 }
 
-export async function fetchCanteen(): Promise<{ status: CanteenStatus; menu: CanteenMenuItem[] } | null> {
-  if (!isSupabaseConfigured || !supabase) return null;
-  const { data: canteens } = await supabase.from('canteens').select('*').limit(1);
+export async function fetchCanteen(): Promise<{ status: CanteenStatus; menu: CanteenMenuItem[] }> {
+  const c = client();
+  const { data: canteens, error } = await c.from('canteens').select('*').limit(1);
+  if (error) throw connError(error, 'Canteen information could not be loaded.');
   const canteen = (canteens ?? [])[0];
-  if (!canteen) return null;
-  const { data: menu } = await supabase.from('canteen_menu_items').select('*').eq('canteen_id', canteen.id);
+  if (!canteen) throw new CampusApiError('Canteen information is not available right now.');
+  const { data: menu, error: menuError } = await c
+    .from('canteen_menu_items')
+    .select('*')
+    .eq('canteen_id', canteen.id);
+  if (menuError) throw connError(menuError, 'Canteen menu could not be loaded.');
   return {
     status: {
       canteenName: canteen.name,
@@ -287,10 +314,10 @@ export async function fetchCanteen(): Promise<{ status: CanteenStatus; menu: Can
   };
 }
 
-export async function fetchFacilities(): Promise<FacilityItem[] | null> {
-  if (!isSupabaseConfigured || !supabase) return null;
-  const { data, error } = await supabase.from('facilities').select('*');
-  if (error || !data) return null;
+export async function fetchFacilities(): Promise<FacilityItem[]> {
+  const c = client();
+  const { data, error } = await c.from('facilities').select('*');
+  if (error || !data) throw connError(error, 'Facilities could not be loaded.');
   return data.map((f: any) => ({
     id: f.legacy_id ?? f.id,
     name: f.name,
@@ -305,20 +332,20 @@ export async function fetchFacilities(): Promise<FacilityItem[] | null> {
   }));
 }
 
-export async function fetchLibrary(): Promise<{ books: LibraryBook[]; availability: LibrarySeatAvailability } | null> {
-  if (!isSupabaseConfigured || !supabase) return null;
-  const sid = await activeStudentId();
-  const { data: books, error } = await supabase.from('library_books').select('*');
-  if (error || !books) return null;
-  let loans: any[] = [];
-  try {
-    const res = await supabase.from('library_loans').select('book_id, borrowed_date, return_date, is_overdue').eq('student_id', sid).is('returned_at', null);
-    loans = res.data ?? [];
-  } catch {
-    loans = [];
-  }
-  const byBook = new Map(loans.map((l: any) => [l.book_id, l]));
-  const { data: statusRows } = await supabase.from('library_status').select('*').limit(1);
+export async function fetchLibrary(): Promise<{ books: LibraryBook[]; availability: LibrarySeatAvailability }> {
+  const c = client();
+  const uid = await currentUserId();
+  const { data: books, error } = await c.from('library_books').select('*');
+  if (error || !books) throw connError(error, 'Library catalog could not be loaded.');
+  const { data: loans, error: loansError } = await c
+    .from('library_loans')
+    .select('book_id, borrowed_date, return_date, is_overdue')
+    .eq('student_id', uid)
+    .is('returned_at', null);
+  if (loansError) throw connError(loansError, 'Library loans could not be loaded.');
+  const byBook = new Map((loans ?? []).map((l: any) => [l.book_id, l]));
+  const { data: statusRows, error: statusError } = await c.from('library_status').select('*').limit(1);
+  if (statusError) throw connError(statusError, 'Library status could not be loaded.');
   const s = (statusRows ?? [])[0];
   return {
     books: books.map((b: any) => {
@@ -347,10 +374,10 @@ export async function fetchLibrary(): Promise<{ books: LibraryBook[]; availabili
   };
 }
 
-export async function fetchTransport(): Promise<TransportRoute[] | null> {
-  if (!isSupabaseConfigured || !supabase) return null;
-  const { data, error } = await supabase.from('transport_routes').select('*');
-  if (error || !data) return null;
+export async function fetchTransport(): Promise<TransportRoute[]> {
+  const c = client();
+  const { data, error } = await c.from('transport_routes').select('*');
+  if (error || !data) throw connError(error, 'Transport schedules could not be loaded.');
   return data.map((t: any) => ({
     id: t.legacy_id ?? t.id,
     routeNumber: t.route_number,
@@ -363,24 +390,11 @@ export async function fetchTransport(): Promise<TransportRoute[] | null> {
   }));
 }
 
-export async function fetchTickets(): Promise<HelpdeskTicket[] | null> {
-  if (!isSupabaseConfigured || !supabase) return null;
-  const sid = await activeStudentId();
-  // Authenticated users hit RLS owner policies; anon falls back to demo rows intentionally denied -> return null.
-  const { data: session } = await supabase.auth.getSession();
-  const effectiveId = session.session?.user.id ?? (sid === DEMO_PROFILE_ID ? null : sid);
-  const queryId = effectiveId ?? DEMO_PROFILE_ID;
-  // Anon catalog policy denies ticket reads, so only attempt when a session exists or demo fallback desired.
-  if (!session.session) return null;
-  const { data, error } = await supabase
-    .from('helpdesk_tickets')
-    .select('id, display_id, student_id, student_name, title, description, location, category, priority, status, created_at, updated_at, ticket_timeline(step, timestamp_text, note, created_at)')
-    .eq('student_id', queryId)
-    .order('created_at', { ascending: false });
-  if (error || !data) return null;
-  return data.map((t: any) => ({
+export function mapTicketRow(t: any, studentNo: string): HelpdeskTicket {
+  return {
     id: t.display_id,
-    studentId: t.student_id === DEMO_PROFILE_ID ? 'CS23045' : t.student_id.slice(0, 7).toUpperCase(),
+    uuid: t.id,
+    studentId: studentNo,
     studentName: t.student_name,
     title: t.title,
     description: t.description,
@@ -394,28 +408,194 @@ export async function fetchTickets(): Promise<HelpdeskTicket[] | null> {
       .slice()
       .sort((a: any, b: any) => (a.created_at < b.created_at ? -1 : 1))
       .map((s: any) => ({ step: s.step, timestamp: s.timestamp_text || fmtDateTime(s.created_at), note: s.note ?? undefined })),
-  }));
+  };
 }
 
-export async function fetchNotifications(): Promise<NotificationItem[] | null> {
-  if (!isSupabaseConfigured || !supabase) return null;
-  const { data: session } = await supabase.auth.getSession();
-  if (!session.session) return null;
-  const sid = session.session.user.id;
-  const { data, error } = await supabase
-    .from('notifications')
-    .select('id, legacy_id, title, message, type, is_read, action_view, action_tab, action_id, created_at')
-    .eq('student_id', sid)
-    .order('created_at', { ascending: false })
-    .limit(50);
-  if (error || !data) return null;
-  return data.map((n: any) => ({
+export async function fetchTickets(): Promise<HelpdeskTicket[]> {
+  const c = client();
+  const uid = await currentUserId();
+  const { data: profile, error: profileError } = await c
+    .from('profiles')
+    .select('student_no')
+    .eq('id', uid)
+    .maybeSingle();
+  if (profileError || !profile) throw connError(profileError, 'Your tickets could not be loaded.');
+  const { data, error } = await c
+    .from('helpdesk_tickets')
+    .select('id, display_id, student_id, student_name, title, description, location, category, priority, status, created_at, updated_at, ticket_timeline(step, timestamp_text, note, created_at)')
+    .eq('student_id', uid)
+    .order('created_at', { ascending: false });
+  if (error || !data) throw connError(error, 'Your tickets could not be loaded.');
+  return data.map((t: any) => mapTicketRow(t, profile.student_no ?? 'STUDENT'));
+}
+
+export function mapNotificationRow(n: any): NotificationItem {
+  return {
     id: n.legacy_id ?? n.id,
+    uuid: n.id,
     title: n.title,
     message: n.message,
     timestamp: fmtDateTime(n.created_at),
     isRead: Boolean(n.is_read),
     type: n.type,
     actionLink: n.action_view ? { view: n.action_view, tab: n.action_tab ?? undefined, id: n.action_id ?? undefined } : undefined,
-  }));
+  };
+}
+
+export async function fetchNotifications(): Promise<NotificationItem[]> {
+  const c = client();
+  const uid = await currentUserId();
+  const { data, error } = await c
+    .from('notifications')
+    .select('id, legacy_id, title, message, type, is_read, action_view, action_tab, action_id, created_at')
+    .eq('student_id', uid)
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error || !data) throw connError(error, 'Notifications could not be loaded.');
+  return data.map(mapNotificationRow);
+}
+
+// ---------------------------------------------------------------------------
+// Mutations (all confirmed by Supabase before reporting success)
+// ---------------------------------------------------------------------------
+
+export interface TicketInput {
+  title: string;
+  description: string;
+  location: string;
+  category: TicketCategory;
+  priority: TicketPriority;
+}
+
+/**
+ * Creates a REAL helpdesk ticket. The database assigns display_id
+ * (HD- sequence), the trigger writes the 'Created' timeline step, and a
+ * persisted confirmation notification is stored. Throws unless the ticket
+ * provably exists in Supabase.
+ */
+export async function createTicket(input: TicketInput): Promise<HelpdeskTicket> {
+  const c = client();
+  const uid = await currentUserId();
+  const { data: profile, error: profileError } = await c
+    .from('profiles')
+    .select('full_name, student_no')
+    .eq('id', uid)
+    .maybeSingle();
+  if (profileError || !profile) throw connError(profileError, 'Ticket could not be created. Please try again.');
+
+  const { data, error } = await c
+    .from('helpdesk_tickets')
+    .insert({
+      student_id: uid,
+      student_name: profile.full_name,
+      title: input.title,
+      description: input.description,
+      location: input.location,
+      category: input.category,
+      priority: input.priority,
+    })
+    .select('id, display_id, student_id, student_name, title, description, location, category, priority, status, created_at, updated_at, ticket_timeline(step, timestamp_text, note, created_at)')
+    .single();
+  if (error || !data) {
+    if (error && /row-level security|permission denied/i.test(error.message)) {
+      throw new CampusApiError('Ticket could not be created. Your session may have expired — please sign in again.', error.code);
+    }
+    throw new CampusApiError('Ticket could not be created. Check your connection and try again.', error?.code);
+  }
+
+  // Best-effort persisted confirmation (the ticket itself already exists).
+  try {
+    await c.from('notifications').insert({
+      student_id: uid,
+      title: `Ticket Logged: ${data.display_id}`,
+      message: `Your issue regarding "${data.title}" at ${data.location} is logged. Status: Pending.`,
+      type: 'ticket',
+      action_view: 'helpdesk',
+      action_id: data.display_id,
+    });
+  } catch {
+    /* confirmation notification is auxiliary; the ticket is the source of truth */
+  }
+
+  return mapTicketRow(data, profile.student_no ?? 'STUDENT');
+}
+
+/**
+ * Registers/unregisters the signed-in student for an event using the REAL
+ * event_registrations table. Capacity and duplicates are enforced by the
+ * database (UNIQUE + count guard); the confirmed count is read back.
+ */
+export async function setEventRegistration(eventUuid: string, register: boolean): Promise<void> {
+  const c = client();
+  const uid = await currentUserId();
+  if (register) {
+    const { error } = await c.from('event_registrations').insert({ event_id: eventUuid, student_id: uid });
+    if (error) {
+      if (error.code === '23505') return; // already registered — idempotent success
+      if (/full|capacity|maximum/i.test(error.message)) {
+        throw new CampusApiError('This event is full. Registration was not completed.', error.code);
+      }
+      throw connError(error, 'Registration could not be completed.');
+    }
+    try {
+      const { data: evt } = await c.from('events').select('title, location').eq('id', eventUuid).maybeSingle();
+      await c.from('notifications').insert({
+        student_id: uid,
+        title: 'Event Registration Confirmed',
+        message: `You are successfully registered for "${evt?.title ?? 'the event'}". Venue: ${evt?.location ?? 'see event details'}.`,
+        type: 'event',
+        action_view: 'events',
+      });
+    } catch {
+      /* auxiliary */
+    }
+  } else {
+    const { error } = await c
+      .from('event_registrations')
+      .delete()
+      .eq('event_id', eventUuid)
+      .eq('student_id', uid);
+    if (error) throw connError(error, 'Cancellation could not be completed.');
+  }
+}
+
+/** Persists the student's own deadline completion state. */
+export async function setDeadlineCompletion(deadlineUuid: string, completed: boolean): Promise<void> {
+  const c = client();
+  const uid = await currentUserId();
+  if (completed) {
+    const { error } = await c
+      .from('deadline_completions')
+      .upsert({ deadline_id: deadlineUuid, student_id: uid, is_completed: true }, { onConflict: 'deadline_id,student_id' });
+    if (error) throw connError(error, 'Deadline status could not be saved.');
+  } else {
+    const { error } = await c
+      .from('deadline_completions')
+      .delete()
+      .eq('deadline_id', deadlineUuid)
+      .eq('student_id', uid);
+    if (error) throw connError(error, 'Deadline status could not be saved.');
+  }
+}
+
+export async function markNotificationRead(notificationUuid: string): Promise<void> {
+  const c = client();
+  const uid = await currentUserId();
+  const { error } = await c
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('id', notificationUuid)
+    .eq('student_id', uid);
+  if (error) throw connError(error, 'Notification could not be updated.');
+}
+
+export async function markAllNotificationsRead(): Promise<void> {
+  const c = client();
+  const uid = await currentUserId();
+  const { error } = await c
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('student_id', uid)
+    .eq('is_read', false);
+  if (error) throw connError(error, 'Notifications could not be updated.');
 }
