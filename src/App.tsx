@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate } from 'react-router-dom';
 import { AuthService } from './services/authService';
+import { signInAdminDemo } from './services/adminAuth';
 import { AdminApp } from './components/admin/AdminApp';
 import { StudentDataGate } from './components/common/StudentDataGate';
 import { NavSection } from './types';
@@ -72,12 +73,17 @@ const StudentApp: React.FC = () => {
     }
   };
 
+  const handleSelectAdmin = async () => {
+    await signInAdminDemo('admin');
+    navigate('/admin');
+  };
+
   // 1. Initial Portal Selection View
   if (flowState === 'portal-select') {
     return (
       <PortalSelect
         onSelectStudent={handleSelectStudent}
-        onSelectAdmin={() => navigate('/admin/login')}
+        onSelectAdmin={handleSelectAdmin}
       />
     );
   }

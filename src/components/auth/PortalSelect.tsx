@@ -101,7 +101,7 @@ export const PortalSelect: React.FC<PortalSelectProps> = ({ onSelectStudent, onS
                   Admin
                 </h3>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-medium">
-                  Sign In
+                  Instant Access
                 </span>
               </div>
               <p className="mt-1.5 text-xs text-campus-textMuted leading-relaxed">
@@ -110,7 +110,7 @@ export const PortalSelect: React.FC<PortalSelectProps> = ({ onSelectStudent, onS
             </div>
 
             <div className="mt-5 flex items-center gap-1.5 text-xs font-semibold text-blue-400 group-hover:translate-x-1 transition-transform">
-              <span>Enter Portal</span>
+              <span>Enter Portal (1-Click)</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </div>
           </button>
