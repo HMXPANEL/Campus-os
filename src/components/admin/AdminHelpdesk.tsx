@@ -10,6 +10,7 @@ import {
   MapPin
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../../services/supabaseClient';
+import { subscribeAdminRealtime } from '../../services/realtime';
 import { useAdminSession } from './AdminSessionContext';
 
 interface HelpdeskTicket {
@@ -63,13 +64,13 @@ export const AdminHelpdesk: React.FC = () => {
   const [updating, setUpdating] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  const fetchData = async () => {
+  const fetchData = async (quiet = false) => {
     if (!isSupabaseConfigured || !supabase) {
       setError('Supabase backend not configured');
       setLoading(false);
       return;
     }
-    setLoading(true);
+    if (!quiet) setLoading(true);
     setError(null);
     try {
       let query = supabase.from('helpdesk_tickets').select('*').order('created_at', { ascending: false });
@@ -93,12 +94,19 @@ export const AdminHelpdesk: React.FC = () => {
     } catch (e: any) {
       setError(e.message ?? 'Failed to load helpdesk tickets');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
   useEffect(() => {
     void fetchData();
+    // Live sync: a ticket created in the Student portal (or a status change
+    // from another admin) refreshes this list. RLS still constrains rows.
+    const unsubscribe = subscribeAdminRealtime(['helpdesk_tickets', 'ticket_timeline'], () => {
+      void fetchData(true);
+    });
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [role, session]);
 
   const openTicketDrawer = async (ticket: HelpdeskTicket) => {

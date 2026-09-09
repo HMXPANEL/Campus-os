@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, GraduationCap, LifeBuoy, RefreshCw, TrendingUp, Users, BarChart3, Activity } from 'lucide-react';
 import { getDashboardMetrics, type AdminDashboardMetrics, getAttendanceDistribution, getTicketStatusDistribution, getEventRegistrationData, type AttendanceDistribution, type TicketStatusData, type EventRegistrationData } from '../../services/adminApi';
+import { subscribeAdminRealtime } from '../../services/realtime';
 import {
   BarChart,
   Bar,
@@ -25,8 +26,8 @@ export const AdminDashboard: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (quiet = false) => {
+    if (!quiet) setLoading(true);
     setError(null);
     try {
       const [metricsData, attendanceDistData, ticketStatusData, eventRegData] = await Promise.all([
@@ -46,12 +47,20 @@ export const AdminDashboard: React.FC = () => {
       setEventRegData([]);
       setError(e instanceof Error ? e.message : 'Could not load dashboard metrics.');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
   useEffect(() => {
     void load();
+    // Live sync: student registrations, new tickets, or attendance writes
+    // refresh these aggregates. RLS still constrains every row.
+    const unsubscribe = subscribeAdminRealtime(
+      ['helpdesk_tickets', 'events', 'event_registrations', 'attendance_records', 'profiles'],
+      () => void load(true)
+    );
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (loading) {
@@ -202,7 +211,7 @@ export const AdminDashboard: React.FC = () => {
     <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold text-white tracking-tight">Operations Overview</h1>
-        <p className="text-xs text-slate-400 mt-1">Live campus metrics from Supabase · Phase 2</p>
+        <p className="text-xs text-slate-400 mt-1">Live campus metrics from Supabase</p>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -259,7 +268,7 @@ export const AdminDashboard: React.FC = () => {
 
       <div className="flex items-center gap-2 text-[11px] text-slate-600">
         <GraduationCap className="w-3.5 h-3.5" />
-        <span>Full management modules unlock in later phases — see the P-badge on each nav item.</span>
+        <span>All metrics are computed live from Supabase rows visible to your role.</span>
       </div>
     </div>
   );

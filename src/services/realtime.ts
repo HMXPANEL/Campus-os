@@ -89,3 +89,42 @@ export function subscribeStudentRealtime(userId: string, hooks: StudentRealtimeH
     channel = null;
   };
 }
+
+/**
+ * Live synchronization for the Admin portal over Supabase Realtime
+ * (postgres_changes). RLS still applies: the server only delivers rows the
+ * signed-in administrator is allowed to read. No polling, no fake realtime.
+ *
+ * Example flows covered:
+ * - Student creates a ticket        → Admin Helpdesk refreshes
+ * - Admin changes ticket status     → Student portal refreshes (student hook)
+ * - Teacher updates attendance      → Student + Admin dashboard refresh
+ * - Admin publishes event/notice    → Student portal refreshes (student hook)
+ * - Student registers for an event  → Admin dashboard refreshes
+ *
+ * The returned function unsubscribes and must be called on unmount.
+ */
+export function subscribeAdminRealtime(tables: string[], onChange: () => void): () => void {
+  if (!supabase) return () => {};
+  let channel: RealtimeChannel | null = supabase.channel(`campus-admin-${tables.join('-')}`);
+
+  try {
+    for (const table of tables) {
+      channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => onChange());
+    }
+    channel.subscribe();
+  } catch {
+    channel = null;
+  }
+
+  return () => {
+    try {
+      if (channel && supabase) {
+        void supabase.removeChannel(channel);
+      }
+    } catch {
+      /* ignore */
+    }
+    channel = null;
+  };
+}

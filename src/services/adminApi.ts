@@ -78,6 +78,7 @@ export async function getDashboardMetrics(): Promise<AdminDashboardMetrics> {
     .from('events')
     .select('id, title, date_text, location, registered_count, max_seats')
     .eq('is_past', false)
+    .eq('is_published', true)
     .order('created_at', { ascending: true })
     .limit(5);
   if (eventsRes.error) throw eventsRes.error;
@@ -169,6 +170,7 @@ export async function getEventRegistrationData(): Promise<EventRegistrationData[
     .from('events')
     .select('title, registered_count, max_seats')
     .eq('is_past', false)
+    .eq('is_published', true)
     .order('created_at', { ascending: true })
     .limit(6);
   if (error) throw error;
