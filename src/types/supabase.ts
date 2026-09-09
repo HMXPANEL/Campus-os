@@ -85,6 +85,8 @@ export type Database = {
           category: Database['public']['Enums']['ticket_category'];
           priority: Database['public']['Enums']['ticket_priority'];
           status: Database['public']['Enums']['ticket_status'];
+          assignee_id: string | null;
+          closed_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -114,6 +116,7 @@ export type Database = {
           banner_image: string | null;
           tags: string[];
           is_past: boolean;
+          is_published: boolean;
         };
         Insert: Partial<Database['public']['Tables']['events']['Row']> & {
           title: string;
@@ -156,7 +159,7 @@ export type Database = {
         | 'Wi-Fi / IT'
         | 'Other';
       ticket_priority: 'Low' | 'Medium' | 'High';
-      ticket_status: 'Pending' | 'In Progress' | 'Resolved';
+      ticket_status: 'Pending' | 'Assigned' | 'In Progress' | 'Resolved' | 'Closed';
       ticket_step: 'Created' | 'Assigned' | 'In Progress' | 'Resolved';
       notification_type: 'attendance' | 'deadline' | 'ticket' | 'event' | 'transport' | 'general';
       attendance_mark: 'Present' | 'Absent';

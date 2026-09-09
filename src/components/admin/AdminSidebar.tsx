@@ -123,11 +123,6 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
                   >
                     <Icon className="w-4 h-4 shrink-0" />
                     <span className="flex-1">{item.label}</span>
-                    {item.phase > 1 && (
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-500 border border-slate-700">
-                        P{item.phase}
-                      </span>
-                    )}
                   </NavLink>
                 );
               })}
