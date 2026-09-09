@@ -115,14 +115,6 @@ export class AuthService {
     return { success: true };
   }
 
-  /**
-   * 1-Click Instant Login for Student Portal without entering a password.
-   * Signs in against the live Supabase database seamlessly.
-   */
-  public static async loginWithoutPassword(): Promise<{ success: boolean; error?: string }> {
-    return AuthService.login('aditya.sharma@campus.edu', 'CampusOS@2026');
-  }
-
   public static getSession(): AuthSession | null {
     return readFlag();
   }

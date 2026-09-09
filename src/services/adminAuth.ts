@@ -90,55 +90,15 @@ export async function signInAdmin(email: string, password: string): Promise<Admi
   return { ok: true, role };
 }
 
-const ADMIN_DEMO_FLAG = 'campusos_admin_demo_session';
-
-export function getAdminDemoSession(): VerifiedAdminSession | null {
-  try {
-    const raw = localStorage.getItem(ADMIN_DEMO_FLAG);
-    if (raw) return JSON.parse(raw) as VerifiedAdminSession;
-  } catch {}
-  return null;
-}
-
-export function clearAdminDemoSession(): void {
-  try {
-    localStorage.removeItem(ADMIN_DEMO_FLAG);
-  } catch {}
-}
-
-/**
- * 1-Click Instant Demo Login for Admin Portal without entering passwords or role hurdles.
- * Connects to live Supabase backend seamlessly.
- */
-export async function signInAdminDemo(role: AdminRole = 'admin'): Promise<AdminSignInResult> {
-  if (supabase) {
-    try {
-      await supabase.auth.signInWithPassword({
-        email: 'aditya.sharma@campus.edu',
-        password: 'CampusOS@2026',
-      });
-    } catch {}
-  }
-  const session: VerifiedAdminSession = {
-    userId: 'admin-demo-user',
-    email: 'admin@campus.edu',
-    role,
-  };
-  try {
-    localStorage.setItem(ADMIN_DEMO_FLAG, JSON.stringify(session));
-  } catch {}
-  return { ok: true, role };
-}
-
 /**
  * Verify the current Supabase session AND the caller's administrative role.
  * Returns null when there is no session, the profile cannot be read, or the
  * role is not administrative (fail closed in every case).
+ *
+ * There is intentionally NO demo fallback, NO hardcoded credential, and NO
+ * localStorage session: the Supabase Auth session is the only authority.
  */
 export async function getVerifiedAdminSession(): Promise<VerifiedAdminSession | null> {
-  const demo = getAdminDemoSession();
-  if (demo) return demo;
-
   if (!isSupabaseConfigured || !supabase) return null;
   try {
     const { data } = await supabase.auth.getSession();
@@ -161,7 +121,6 @@ export async function getVerifiedAdminSession(): Promise<VerifiedAdminSession | 
 
 /** End the administrator's Supabase session. */
 export async function signOutAdmin(): Promise<void> {
-  clearAdminDemoSession();
   try {
     if (isSupabaseConfigured && supabase) {
       await supabase.auth.signOut();

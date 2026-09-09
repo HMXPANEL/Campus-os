@@ -26,11 +26,7 @@ export const StudentDataGate: React.FC<StudentDataGateProps> = ({ onSessionInval
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let valid = await AuthService.validateSession();
-      if (!valid) {
-        const autoLog = await AuthService.loginWithoutPassword();
-        valid = autoLog.success;
-      }
+      const valid = await AuthService.validateSession();
       if (cancelled) return;
       if (!valid) {
         onSessionInvalid();

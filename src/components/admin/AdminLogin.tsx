@@ -1,15 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Lock, Mail, ShieldAlert, ShieldCheck, Sparkles, Eye, EyeOff } from 'lucide-react';
-import { signInAdmin, signInAdminDemo } from '../../services/adminAuth';
+import { signInAdmin } from '../../services/adminAuth';
 import { useAdminSession } from './AdminSessionContext';
 
 /**
- * Admin sign-in with 1-click demo access and live Supabase Auth.
+ * Admin sign-in with live Supabase Auth + role verification.
+ * No demo bypass: every sign-in is verified server-side and the caller's
+ * profile role must be administrative, otherwise access is denied.
  */
 export const AdminLogin: React.FC = () => {
   const navigate = useNavigate();
-  const { status, refresh } = useAdminSession();
+  const { status } = useAdminSession();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -77,44 +79,6 @@ export const AdminLogin: React.FC = () => {
               <div className="flex-1">{error}</div>
             </div>
           )}
-
-          {/* Quick 1-Click Demo Access */}
-          <div className="mb-6">
-            <button
-              type="button"
-              disabled={loading}
-              onClick={async () => {
-                setError(null);
-                setLoading(true);
-                try {
-                  const res = await signInAdminDemo('admin');
-                  if (res.ok) {
-                    await refresh();
-                    navigate('/admin', { replace: true });
-                  } else {
-                    setError(res.error || 'Failed to enter admin demo.');
-                  }
-                } catch {
-                  setError('Failed to enter admin console.');
-                } finally {
-                  setLoading(false);
-                }
-              }}
-              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-sm font-semibold shadow-glow-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-            >
-              <Sparkles className="w-4 h-4" />
-              <span>Enter as Admin (1-Click Demo Access)</span>
-            </button>
-
-            <div className="relative my-5">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-slate-800" />
-              </div>
-              <div className="relative flex justify-center text-[10px] uppercase font-mono tracking-wider">
-                <span className="bg-slate-900 px-3 text-slate-500">Or sign in with admin credentials</span>
-              </div>
-            </div>
-          </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>

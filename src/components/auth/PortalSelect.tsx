@@ -73,16 +73,16 @@ export const PortalSelect: React.FC<PortalSelectProps> = ({ onSelectStudent, onS
                   Student
                 </h3>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
-                  Instant Access
+                  Secure Sign-In
                 </span>
               </div>
               <p className="mt-1.5 text-xs text-campus-textMuted leading-relaxed">
-                Track attendance, classes, academic records, and campus services without entering a password.
+                Track attendance, classes, academic records, and campus services with your college credentials.
               </p>
             </div>
 
             <div className="mt-5 flex items-center gap-1.5 text-xs font-semibold text-blue-400 group-hover:translate-x-1 transition-transform">
-              <span>Enter Portal (1-Click)</span>
+              <span>Enter Portal</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </div>
           </button>
@@ -100,8 +100,8 @@ export const PortalSelect: React.FC<PortalSelectProps> = ({ onSelectStudent, onS
                 <h3 className="text-lg font-bold text-slate-200 group-hover:text-blue-400 transition-colors">
                   Admin
                 </h3>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-medium">
-                  Instant Access
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
+                  Restricted
                 </span>
               </div>
               <p className="mt-1.5 text-xs text-campus-textMuted leading-relaxed">
@@ -110,7 +110,7 @@ export const PortalSelect: React.FC<PortalSelectProps> = ({ onSelectStudent, onS
             </div>
 
             <div className="mt-5 flex items-center gap-1.5 text-xs font-semibold text-blue-400 group-hover:translate-x-1 transition-transform">
-              <span>Enter Portal (1-Click)</span>
+              <span>Sign In with Admin Credentials</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </div>
           </button>

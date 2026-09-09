@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate } from 'react-router-dom';
 import { AuthService } from './services/authService';
-import { signInAdminDemo } from './services/adminAuth';
 import { AdminApp } from './components/admin/AdminApp';
 import { StudentDataGate } from './components/common/StudentDataGate';
 import { NavSection } from './types';
@@ -64,18 +63,12 @@ const StudentApp: React.FC = () => {
     setNavigationMeta({});
   };
 
-  const handleSelectStudent = async () => {
-    const res = await AuthService.loginWithoutPassword();
-    if (res.success) {
-      setFlowState('student-app');
-    } else {
-      setFlowState('student-login');
-    }
+  const handleSelectStudent = () => {
+    setFlowState('student-login');
   };
 
-  const handleSelectAdmin = async () => {
-    await signInAdminDemo('admin');
-    navigate('/admin');
+  const handleSelectAdmin = () => {
+    navigate('/admin/login');
   };
 
   // 1. Initial Portal Selection View

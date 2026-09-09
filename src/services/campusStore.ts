@@ -39,7 +39,6 @@ import {
   setEventRegistration,
 } from './campusApi';
 import { subscribeStudentRealtime } from './realtime';
-import { supabase } from './supabaseClient';
 
 /**
  * Campus data store. Supabase is the SOLE source of truth:
@@ -137,18 +136,7 @@ class CampusDataStore {
     this.loading = true;
     this.setStatus('loading');
     try {
-      let uid: string;
-      try {
-        uid = await currentUserId();
-      } catch {
-        if (supabase) {
-          await supabase.auth.signInWithPassword({
-            email: 'aditya.sharma@campus.edu',
-            password: 'CampusOS@2026',
-          });
-        }
-        uid = await currentUserId();
-      }
+      const uid = await currentUserId();
       const [
         student,
         timetable,
