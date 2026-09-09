@@ -65,47 +65,56 @@ export const AdminAI: React.FC = () => {
       const lower = text.toLowerCase();
 
       if (lower.includes('attendance') || lower.includes('below 75') || lower.includes('risk')) {
-        const { data: recs } = await supabase.from('attendance_records').select('*');
-        const atRisk = (recs ?? []).filter((r: any) => r.percentage < 75);
+        const { data: recs, error: attErr } = await supabase
+          .from('attendance_records')
+          .select('percentage, attended, total, subjects(code, name)');
+        if (attErr) throw attErr;
+        const rows = (recs ?? []) as any[];
+        const atRisk = rows.filter((r) => Number(r.percentage) < 75);
         const avg =
-          (recs ?? []).length > 0
-            ? Math.round(((recs ?? []).reduce((s: number, r: any) => s + r.percentage, 0) / (recs ?? []).length) * 10) / 10
+          rows.length > 0
+            ? Math.round((rows.reduce((s: number, r: any) => s + Number(r.percentage), 0) / rows.length) * 10) / 10
             : 0;
 
-        replyText = `### Campus Attendance Intelligence\n\n- **Campus Average Attendance:** **${avg}%**\n- **Students Below 75% Threshold:** **${atRisk.length} subjects flagged**\n\n**Flagged Courses:**\n${atRisk
-          .map((r: any) => `- **${r.subject_code} (${r.subject_name}):** ${r.percentage}% (${r.attended_classes}/${r.total_classes} classes)`)
-          .join('\n')}\n\n*Recommendation:* Issue academic warnings to affected students to prevent exam disqualification.`;
+        replyText = `### Campus Attendance Intelligence\n\n- **Campus Average Attendance:** **${avg}%**\n- **Records Below 75% Threshold:** **${atRisk.length}**\n\n**Flagged Records:**\n${atRisk
+          .map((r: any) => `- **${r.subjects?.code ?? '—'} (${r.subjects?.name ?? '—'}):** ${r.percentage}% (${r.attended}/${r.total} classes)`)
+          .join('\n') || 'None — no records are below the threshold.'}\n\n*Recommendation:* Issue academic warnings to affected students to prevent exam disqualification.`;
       } else if (lower.includes('ticket') || lower.includes('maintenance') || lower.includes('helpdesk')) {
-        const { data: tickets } = await supabase
+        const { data: tickets, error: tErr } = await supabase
           .from('helpdesk_tickets')
-          .select('*')
+          .select('display_id, title, location, priority, status')
           .not('status', 'in', '(Resolved,Closed)');
-        
+        if (tErr) throw tErr;
+
         replyText = `### Live Helpdesk & Maintenance Triage\n\nCurrently, there are **${tickets?.length ?? 0} active unresolved tickets** in Supabase:\n\n${(tickets ?? [])
           .map((t: any) => `- **${t.display_id}** [${t.priority}]: ${t.title} at **${t.location}** (${t.status})`)
-          .join('\n')}`;
+          .join('\n') || 'No unresolved tickets.'}`;
       } else if (lower.includes('room') && (lower.includes('problem') || lower.includes('repeat'))) {
-        const { data: tickets } = await supabase.from('helpdesk_tickets').select('location, title, category');
+        const { data: tickets, error: tErr } = await supabase.from('helpdesk_tickets').select('location, title, category');
+        if (tErr) throw tErr;
         const roomCounts: Record<string, number> = {};
         (tickets ?? []).forEach((t: any) => {
           roomCounts[t.location] = (roomCounts[t.location] ?? 0) + 1;
         });
+        const ranked = Object.entries(roomCounts).sort((a, b) => b[1] - a[1]);
+        const top = ranked[0];
 
-        replyText = `### Facility Issue Hotspot Analysis\n\nRepeated issues by location in live database:\n${Object.entries(roomCounts)
+        replyText = `### Facility Issue Hotspot Analysis\n\nRepeated issues by location in the live database:\n${ranked
           .map(([loc, count]) => `- **${loc}:** ${count} logged incident(s)`)
-          .join('\n')}\n\n**Highest Impact Location:** **Room 204** has experienced repeated electrical/AC complaints during lecture hours.`;
+          .join('\n') || 'No tickets recorded yet.'}${top ? `\n\n**Highest Impact Location:** **${top[0]}** with **${top[1]}** logged incident(s).` : ''}`;
       } else if (lower.includes('event') || lower.includes('capacity')) {
-        const { data: events } = await supabase
+        const { data: events, error: eErr } = await supabase
           .from('events')
           .select('title, location, registered_count, max_seats, date_text')
           .eq('is_past', false);
+        if (eErr) throw eErr;
 
         replyText = `### Campus Events & Seating Quotas\n\n${(events ?? [])
-          .map(
-            (e: any) =>
-              `- **${e.title}:** ${e.registered_count}/${e.max_seats} seats booked (${Math.round((e.registered_count / e.max_seats) * 100)}% capacity) on ${e.date_text} at ${e.location}`
-          )
-          .join('\n')}`;
+          .map((e: any) => {
+            const pct = e.max_seats > 0 ? Math.round((e.registered_count / e.max_seats) * 100) : 0;
+            return `- **${e.title}:** ${e.registered_count}/${e.max_seats} seats booked (${pct}% capacity) on ${e.date_text} at ${e.location}`;
+          })
+          .join('\n') || 'No upcoming events published.'}`;
       } else if (lower.includes('notice') || lower.includes('draft')) {
         replyText = `I have drafted an official circular based on your prompt. Before broadcasting to student dashboards, please review and confirm the action below.`;
         actionCard = {
@@ -149,14 +158,15 @@ export const AdminAI: React.FC = () => {
   const handleConfirmAction = async (msgId: string) => {
     if (!supabase) return;
     try {
-      await supabase.from('notices').insert({
+      const { error: insErr } = await supabase.from('notices').insert({
         title: 'Schedule Change: DBMS Practical Lab',
         body: 'The DBMS Practical Lab scheduled for Wednesday has been relocated to CS Lab 2 due to routine maintenance.',
-        audience: 'dept',
+        audience: 'all',
         published_by: 'Registrar Office',
         published_at: new Date().toISOString(),
         is_pinned: true,
       });
+      if (insErr) throw insErr;
 
       setMessages((prev) =>
         prev.map((m) =>
@@ -165,8 +175,17 @@ export const AdminAI: React.FC = () => {
             : m
         )
       );
-    } catch (e) {
-      console.warn('Action confirmation failed:', e);
+    } catch (e: any) {
+      // Never pretend the broadcast succeeded: report the real database error.
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `err-${Date.now()}`,
+          sender: 'ai',
+          text: `Broadcast failed: ${e?.message ?? 'the notice could not be saved.'} Nothing was published.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
     }
   };
 
